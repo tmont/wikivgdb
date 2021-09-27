@@ -1362,82 +1362,44 @@ const generateNesCsv = async (gameNames = []) => {
 			row = $(row);
 
 			const titleElements = row.find('td:nth-child(1) i');
-			// const developerEl = row.find('td:nth-child(2)');
-			// const publisherNAEl = row.find('td:nth-child(3)');
-			// const publisherPALEl = row.find('td:nth-child(4)');
 
-			// const developer = developerEl.text().trim();
-			// let publisherNA = publisherNAEl.text().trim();
-			// let publisherPAL = publisherPALEl.text().trim();
-			const releaseNA = getDate(row.find('td:nth-child(5)'));
-			const releasePAL = getDate(row.find('td:nth-child(6)'));
+			const titles = [];
 
-			// if (publisherNA.toLowerCase() === 'unreleased') {
-			// 	publisherNA = null;
-			// }
-			// if (publisherPAL.toLowerCase() === 'unreleased') {
-			// 	publisherPAL = null;
-			// }
-			//
-			// if (developer && !developerMap[developer]) {
-			// 	developerMap[developer] = {
-			// 		id: Object.keys(developerMap).length + 1,
-			// 		name: developer,
-			// 		link: extractWikiLink(developerEl),
-			// 	};
-			// }
-			//
-			// if (publisherNA && !publisherMap[publisherNA]) {
-			// 	publisherMap[publisherNA] = {
-			// 		id: Object.keys(publisherMap).length + 1,
-			// 		name: publisherNA,
-			// 		link: extractWikiLink(publisherNAEl),
-			// 	};
-			// }
-			// if (publisherPAL && !publisherMap[publisherPAL]) {
-			// 	publisherMap[publisherPAL] = {
-			// 		id: Object.keys(publisherMap).length + 1,
-			// 		name: publisherPAL,
-			// 		link: extractWikiLink(publisherPALEl),
-			// 	};
-			// }
+			titleElements.each((i, el) => {
+				let regionText = $(el).siblings('small').text().trim() || '';
+				regionText = regionText.replace(/[()]/g, '');
+				const regions = regionText.split('/').map(x => x.trim()).filter(Boolean);
 
-			let titleNA;
-			let titleEU = null;
-			let titleFR = null;
+				titles.push({
+					regions,
+					title: $(el).text().trim(),
+				});
+			});
 
-			if (titleElements.length > 1) {
-				titleNA = titleElements.filter((i, el) => {
-					return /NA/.test($(el).siblings('small').text().trim());
-				}).first().text().trim() || titleElements.first().text().trim();
-				titleEU = titleElements.filter((i, el) => {
-					return /EU/.test($(el).siblings('small').text().trim());
-				}).first().text().trim() || null;
-				titleFR = titleElements.filter((i, el) => {
-					return /FR/.test($(el).siblings('small').text().trim());
-				}).first().text().trim() || null;
-			} else {
-				titleNA = titleElements.first().text().trim();
+			if (!titles.length) {
+				log(lliw.red(`failed to find titles in row ${i}`));
+				return;
 			}
 
-			// if (titleNA !== 'Banana Prince') {
-			// 	return;
-			// }
-
-			log(`NES[${i}]: ${lliw.bold(titleNA)}`);
-
 			const link = extractWikiLink(titleElements);
+			const defaultTitle =
+				(titles.find(title => !title.regions.length) ||
+				titles.find(title => title.regions.indexOf('NA') !== -1) ||
+				titles[0]).title;
 
-			const gameInfo = await getGameInfo(link, 'nes', titleNA, gameNames.indexOf(titleNA) !== -1);
-			log(lliw.gray(` NES[${i}]: ${lliw.bold(titleNA)} finished in ${getElapsed(start)}`));
+			if (!defaultTitle) {
+				log(lliw.red(`failed to find default title in row ${i} (${link})`));
+				return;
+			}
+
+			log(`NES[${i}]: ${lliw.bold(defaultTitle)}`);
+			const gameInfo = await getGameInfo(link, 'nes', defaultTitle, gameNames.indexOf(defaultTitle) !== -1);
+			log(lliw.gray(` NES[${i}]: ${lliw.bold(defaultTitle)} finished in ${getElapsed(start)}`));
 
 			nesCsv.push({
 				link,
-				titleNA,
-				titleEU,
-				titleFR,
-				releaseNA,
-				releasePAL,
+				defaultTitle,
+				titles,
 				...gameInfo,
 			});
 		};
@@ -1453,6 +1415,8 @@ const generateNesCsv = async (gameNames = []) => {
 	const contributorMap = {};
 	const credits = [];
 	const releases = [];
+	const gameTitles = [];
+	const regionMap = {};
 
 	const gameRows = nesCsv.map((gameInfo, i) => {
 		const gameId = i + 1;
@@ -1502,9 +1466,7 @@ const generateNesCsv = async (gameNames = []) => {
 
 		return [
 			gameId,
-			gameInfo.titleNA,
-			gameInfo.titleEU,
-			gameInfo.titleFR,
+			gameInfo.defaultTitle,
 			gameInfo.description,
 			gameInfo.link,
 			gameInfo.imageUrl,
@@ -1519,21 +1481,48 @@ const generateNesCsv = async (gameNames = []) => {
 			return;
 		}
 
+		gameInfo.titles.forEach((titleInfo) => {
+			const regions = titleInfo.regions.length ? titleInfo.regions : [ null ];
+
+			regions.forEach((region) => {
+				const titleId = gameTitles.length + 1;
+				if (region && !regionMap[region]) {
+					regionMap[region] = {
+						id: Object.keys(regionMap).length + 1,
+					};
+				}
+
+				const regionId = region ? regionMap[region].id : null;
+
+				gameTitles.push([ titleId, gameId, titleInfo.title, regionId ]);
+			});
+		});
+
 		gameInfo.releases.forEach((release) => {
 			const platforms = release.platforms && release.platforms.length ? release.platforms : [ null ];
 			platforms.forEach((platformName) => {
 				const platform = platformGameMap[platformName];
 				if (!platform && platformName) {
-					log(lliw.magenta(`platform ${lliw.bold(platformName)} for game ${lliw.bold(gameInfo.titleNA)} not found in platformGameMap`));
+					log(lliw.magenta(`platform ${lliw.bold(platformName)} for game ${lliw.bold(gameInfo.defaultTitle)} not found in platformGameMap`));
 				}
 				const regions = release.regions && release.regions.length ? release.regions : [ null ];
 				regions.forEach((region) => {
+					const releaseId = releases.length + 1;
+
+					if (region && !regionMap[region]) {
+						regionMap[region] = {
+							id: Object.keys(regionMap).length + 1,
+						};
+					}
+
+					const regionId = region ? regionMap[region].id : null;
+
 					releases.push([
-						releases.length + 1,
+						releaseId,
 						gameId,
 						platform ? platform.id : null,
 						release.date,
-						region,
+						regionId,
 					]);
 				});
 			});
@@ -1586,6 +1575,12 @@ const generateNesCsv = async (gameNames = []) => {
 			return [ id, credit.gameId, credit.contributorId, credit.role ];
 		})),
 		writeCsv(csvFile('game_releases'), releases),
+		writeCsv(csvFile('game_titles'), gameTitles),
+
+		writeCsv(csvFile('regions'), Object.keys(regionMap).map((name) => {
+			const item = regionMap[name];
+			return [item.id, name];
+		})),
 	]);
 
 	// generate sqlite db
@@ -1602,13 +1597,18 @@ const generateNesCsv = async (gameNames = []) => {
 	execSync(`sqlite3 "${sqliteFile}" <<EOF
 create table game (
 	id integer primary key,
-	title_na text,
-	title_eu text,
-	title_fr text,
+	title text,
 	description text,
 	wiki_link_url text,
 	image_url text
 );
+create table game_title (
+	id integer primary key,
+	game_id integer not null,
+	title text not null,
+	region_id integer
+);
+create unique index game_title_game_title_region on game_title (game_id, title, region_id);
 create table developer (
 	id integer primary key,
 	name text not null unique
@@ -1669,7 +1669,11 @@ create table game_release (
 	game_id integer not null,
 	platform_id integer,
 	date text,
-	region text
+	region_id integer
+);
+create table region (
+	id integer primary key,
+	name text not null unique
 );
 
 .mode csv
@@ -1687,6 +1691,8 @@ create table game_release (
 .import ${csvFile('contributors')} contributor
 .import ${csvFile('credits')} credit
 .import ${csvFile('game_releases')} game_release
+.import ${csvFile('game_titles')} game_title
+.import ${csvFile('regions')} region
 EOF`);
 
 	log(lliw.gray(` done generating sqlite db in ${getElapsed(start)}`));

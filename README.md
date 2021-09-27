@@ -60,12 +60,12 @@ generations will reuse the local HTML.
 ![ERD](./wikivgdb-erd.png)
 
 ## Sample queries
-```sqlite
+```sql
 -- all platforms with game count
 select
 	p.name,
 	count(distinct g.id) count,
-	max(g.title_na) game,
+	max(g.title) game,
 	max(g.wiki_link_url) link
 from platform p
 inner join platform_game pg
@@ -76,12 +76,14 @@ group by 1
 order by 2 desc, 1;
 ```
 
-```sqlite
+```sql
 -- get a bunch of info for all games matching a specific genre
 select
 	g.id,
-	g.title_na as title,
+	g.title,
+	group_concat(distinct gt.title) as alternative_titles,
 	max(gr.date) as latest_release,
+	group_concat(distinct reg.name) as release_regions,
 	group_concat(distinct p.name) as publishers,
 	group_concat(distinct d.name) as developers,
 	group_concat(distinct ge.name) as genres,
@@ -114,6 +116,11 @@ left outer join mode m
 	on mg.mode_id = m.id
 left outer join game_release gr
 	on gr.game_id = g.id
+left outer join region reg
+	on gr.region_id = reg.id
+left outer join game_title gt
+	on g.id = gt.game_id
+	and gt.title != g.title
 group by 1, 2
-order by 3 desc, 2;
+order by 4 desc, 2;
 ```
