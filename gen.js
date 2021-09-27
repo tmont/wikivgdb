@@ -1506,8 +1506,6 @@ const generateNesCsv = async (gameNames = []) => {
 			gameInfo.titleEU,
 			gameInfo.titleFR,
 			gameInfo.description,
-			gameInfo.releaseNA,
-			gameInfo.releasePAL,
 			gameInfo.link,
 			gameInfo.imageUrl,
 		];
@@ -1608,14 +1606,12 @@ create table game (
 	title_eu text,
 	title_fr text,
 	description text,
-	release_date_na text,
-	release_date_pal text,
 	wiki_link_url text,
 	image_url text
 );
 create table developer (
 	id integer primary key,
-	name not null unique
+	name text not null unique
 );
 create table developer_game (
 	developer_id integer not null,
@@ -1624,7 +1620,7 @@ create table developer_game (
 );
 create table publisher (
 	id integer primary key,
-	name not null unique
+	name text not null unique
 );
 create table publisher_game (
 	publisher_id integer not null,
@@ -1633,7 +1629,7 @@ create table publisher_game (
 );
 create table genre (
 	id integer primary key,
-	name not null unique
+	name text not null unique
 );
 create table genre_game (
 	genre_id integer not null,
@@ -1642,7 +1638,7 @@ create table genre_game (
 );
 create table mode (
 	id integer primary key,
-	name not null unique
+	name text not null unique
 );
 create table mode_game (
 	mode_id integer not null,
@@ -1651,9 +1647,8 @@ create table mode_game (
 );
 create table contributor (
 	id integer primary key,
-	name not null
+	name text not null unique
 );
-create index contributor_name on contributor (name);
 create table credit (
 	id integer primary key,
 	game_id integer not null,
@@ -1663,7 +1658,7 @@ create table credit (
 create unique index credit_game_contributor_role_unique on credit (game_id, contributor_id, role);
 create table platform (
 	id integer primary key,
-	name not null unique
+	name text not null unique
 );
 create table platform_game (
 	platform_id integer not null,
