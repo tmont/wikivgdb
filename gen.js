@@ -1604,9 +1604,13 @@ create table game (
 );
 create table game_title (
 	id integer primary key,
-	game_id integer not null,
+	game_id integer not null
+		constraint game_title_game_id_fk references game
+			on update restrict on delete restrict,
 	title text not null,
 	region_id integer
+		constraint game_title_region_id_fk references region
+			on update restrict on delete restrict
 );
 create unique index game_title_game_title_region on game_title (game_id, title, region_id);
 create table developer (
@@ -1614,8 +1618,12 @@ create table developer (
 	name text not null unique
 );
 create table developer_game (
-	developer_id integer not null,
-	game_id integer not null,
+	developer_id integer not null
+		constraint developer_game_developer_id_fk references developer
+			on update restrict on delete restrict,
+	game_id integer not null
+		constraint developer_game_game_id_fk references game
+			on update restrict on delete restrict,
 	primary key(developer_id, game_id)
 );
 create table publisher (
@@ -1623,8 +1631,12 @@ create table publisher (
 	name text not null unique
 );
 create table publisher_game (
-	publisher_id integer not null,
-	game_id integer not null,
+	publisher_id integer not null
+		constraint publisher_game_publisher_id_fk references publisher
+			on update restrict on delete restrict,
+	game_id integer not null
+		constraint publisher_game_game_id_fk references game
+			on update restrict on delete restrict,
 	primary key(publisher_id, game_id)
 );
 create table genre (
@@ -1632,8 +1644,12 @@ create table genre (
 	name text not null unique
 );
 create table genre_game (
-	genre_id integer not null,
-	game_id integer not null,
+	genre_id integer not null
+		constraint genre_game_genre_id_fk references genre
+			on update restrict on delete restrict,
+	game_id integer not null
+		constraint genre_game_game_id_fk references game
+			on update restrict on delete restrict,
 	primary key(genre_id, game_id)
 );
 create table mode (
@@ -1641,8 +1657,12 @@ create table mode (
 	name text not null unique
 );
 create table mode_game (
-	mode_id integer not null,
-	game_id integer not null,
+	mode_id integer not null
+		constraint mode_game_game_id_fk references mode
+			on update restrict on delete restrict,
+	game_id integer not null
+		constraint mode_game_game_id_fk references game
+			on update restrict on delete restrict,
 	primary key(mode_id, game_id)
 );
 create table contributor (
@@ -1651,8 +1671,12 @@ create table contributor (
 );
 create table credit (
 	id integer primary key,
-	game_id integer not null,
-	contributor_id integer not null,
+	game_id integer not null
+		constraint credit_game_id_fk references game
+			on update restrict on delete restrict,
+	contributor_id integer not null
+		constraint credit_contributor_id_fk references contributor
+			on update restrict on delete restrict,
 	role text not null
 );
 create unique index credit_game_contributor_role_unique on credit (game_id, contributor_id, role);
@@ -1661,15 +1685,25 @@ create table platform (
 	name text not null unique
 );
 create table platform_game (
-	platform_id integer not null,
+	platform_id integer not null
+		constraint platform_game_platform_id_fk references platform
+			on update restrict on delete restrict,
 	game_id integer not null
+		constraint platform_game_game_id_fk references game
+			on update restrict on delete restrict
 );
 create table game_release (
 	id integer primary key,
-	game_id integer not null,
-	platform_id integer,
+	game_id integer not null
+		constraint game_release_game_id_fk references game
+			on update restrict on delete restrict,
+	platform_id integer
+		constraint game_release_platform_id_fk references platform
+			on update restrict on delete restrict,
 	date text,
 	region_id integer
+		constraint game_release_region_id_fk references region
+			on update restrict on delete restrict
 );
 create table region (
 	id integer primary key,
@@ -1679,20 +1713,21 @@ create table region (
 .mode csv
 .import ${csvFile('games')} game
 .import ${csvFile('developers')} developer
-.import ${csvFile('developers_games')} developer_game
 .import ${csvFile('publishers')} publisher
-.import ${csvFile('publishers_games')} publisher_game
 .import ${csvFile('genres')} genre
-.import ${csvFile('genres_games')} genre_game
 .import ${csvFile('modes')} mode
-.import ${csvFile('modes_games')} mode_game
 .import ${csvFile('platforms')} platform
-.import ${csvFile('platforms_games')} platform_game
 .import ${csvFile('contributors')} contributor
+.import ${csvFile('regions')} region
+
+.import ${csvFile('developers_games')} developer_game
+.import ${csvFile('publishers_games')} publisher_game
+.import ${csvFile('genres_games')} genre_game
+.import ${csvFile('modes_games')} mode_game
+.import ${csvFile('platforms_games')} platform_game
 .import ${csvFile('credits')} credit
 .import ${csvFile('game_releases')} game_release
 .import ${csvFile('game_titles')} game_title
-.import ${csvFile('regions')} region
 EOF`);
 
 	log(lliw.gray(` done generating sqlite db in ${getElapsed(start)}`));
