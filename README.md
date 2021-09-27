@@ -64,7 +64,7 @@ generations will reuse the local HTML.
 -- all platforms with game count
 select
 	p.name,
-    count(*) count,
+	count(distinct g.id) count,
 	max(g.title_na) game,
 	max(g.wiki_link_url) link
 from platform p
@@ -79,20 +79,20 @@ order by 2 desc, 1;
 ```sqlite
 -- get a bunch of info for all games matching a specific genre
 select
-    g.id,
+	g.id,
 	g.title_na as title,
 	max(gr.date) as latest_release,
-    group_concat(distinct p.name) as publishers,
-    group_concat(distinct d.name) as developers,
-    group_concat(distinct ge.name) as genres,
-    group_concat(distinct m.name) as modes
+	group_concat(distinct p.name) as publishers,
+	group_concat(distinct d.name) as developers,
+	group_concat(distinct ge.name) as genres,
+	group_concat(distinct m.name) as modes
 from game g
 inner join (
 	select
 		genre_game.game_id
 	from genre_game
 	inner join genre
-	    on genre_game.genre_id = genre.id
+		on genre_game.genre_id = genre.id
 	where genre.name = 'Simulation'
 ) filtered_games
 	on filtered_games.game_id = g.id
@@ -113,7 +113,7 @@ left outer join mode_game mg
 left outer join mode m
 	on mg.mode_id = m.id
 left outer join game_release gr
-    on gr.game_id = g.id
+	on gr.game_id = g.id
 group by 1, 2
 order by 3 desc, 2;
 ```
