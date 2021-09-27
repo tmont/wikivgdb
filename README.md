@@ -3,7 +3,44 @@
 Generates a SQLite database from video game pages on
 Wikipedia.
 
+btw this is totally hideous, but what do you expect trying to parse
+HTML into a relational database?
+
+## But why?
+I like video games and I like databases, and nothing seems to exist
+that's not behind an API wall. I wanted to download SQL and play
+around with stuff, not craft cURL commands.
+
+Other places like Mobygames or GameFAQs have similar and/or more
+complete data (Wikipedia often cites those sites) but, that's just
+HTML. And also, presumably, they wouldn't enjoy me scraping the
+hell out of their website and dumping it on the Internet. But
+Wikipedia is free for all mankind or whatever.
+
+There are other things like Wikidata, which seemed promising, but
+the more convenient formats (e.g. JSON) were generally incomplete
+and didn't totally correlate with their sister Wikipedia articles.
+The RDF format seemed to be better but it was heavily normalized
+and I didn't really want to make like 200 HTTP requests for
+each game.
+
+And lastly, the HTML for these Wikipedia articles will always be
+available, and will be continuously updated so the database can
+always be regenerated to get the latest data.
+
+The one caveat of course is that the data might be complete and
+utter garbage, or my regular expressions are highly irregular and
+don't do the job properly.
+
+But it was pretty fun to play around with for a hot minute.
+
 ## Usage
+The database is checked in here at `./wikivgdb.sqlite`. To use it:
+
+1. [Download SQLite](https://sqlite.org/download.html) and install it
+2. Run `sqlite3 ./wikivgdb.sqlite`
+3. Run queries
+
 To generate the database:
 
 1. `npm install`
