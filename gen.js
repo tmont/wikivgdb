@@ -6,6 +6,20 @@ const path = require('path');
 const csvStringify = require('csv-stringify');
 const lliw = require('lliw');
 
+const sqliteFile = path.join(__dirname, 'wikivgdb.sqlite');
+const csvFile = (dir, name) => path.join(__dirname, 'dist', `${dir}/${name}.csv`);
+
+let gameId = 0;
+
+const regionMap = {};
+const developerGameMap = {};
+const publisherGameMap = {};
+const genreGameMap = {};
+const modeGameMap = {};
+const platformGameMap = {};
+const contributorMap = {};
+const credits = [];
+
 const log = (...msg) => {
 	msg.forEach((msg) => {
 		const prefix = lliw.gray(new Date().toLocaleTimeString()) + ' ';
@@ -82,19 +96,6 @@ const fetchHtml = async (url, filename, force) => {
 	}
 
 	return await promiseMe(callback => fs.readFile(filename, {encoding: 'utf8'}, callback));
-};
-
-const getDate = ($cell) =>
-	($cell.find('[data-sort-value]').attr('data-sort-value') || '')
-		.replace(/^0+/, '')
-		.replace(/-0000$/, '') || null;
-
-const extractWikiLink = ($el) => {
-	const href = $el.find('a').first().attr('href');
-	if (!href) {
-		return null;
-	}
-	return new URL(href, 'https://en.wikipedia.org/').href;
 };
 
 const promiseLimit = async (limit, arr) => {
@@ -1304,7 +1305,11 @@ const getGameInfo = async (gameUrl, system, gameName, force = false) => {
 			.filter(Boolean);
 	} else {
 		// some game pages don't have a table of contents
-		descriptions = $('#bodyContent .mw-parser-output p').first().toArray().map(p => $(p).text().trim()).filter(Boolean);
+		descriptions = $('#bodyContent .mw-parser-output p')
+			.first()
+			.toArray()
+			.map(p => $(p).text().trim())
+			.filter(Boolean);
 	}
 
 	descriptions = descriptions// get rid of wiki-style citations (e.g. "[0]")
@@ -1344,35 +1349,36 @@ const getGameInfo = async (gameUrl, system, gameName, force = false) => {
 	};
 };
 
-const generateNesCsv = async (gameNames = []) => {
-	const nesStart = Date.now();
-	const nesUrl = 'https://en.wikipedia.org/wiki/List_of_Nintendo_Entertainment_System_games';
-	const html = await fetchHtml(nesUrl, 'lists/games-nes.html');
+const extractGameList = async (wikiUrl, listPlatform, gameNames) => {
+	const gameListStart = Date.now();
+	const html = await fetchHtml(wikiUrl, `lists/games-${listPlatform}.html`);
 	const $ = cheerio.load(html);
 
-	const nesCsv = [];
+	const gameItems = [];
 
-	const rows = $('#softwarelist tbody tr').toArray().slice(2); // skip first two header rows
+	const rows = $('.wikitable')
+		.filter((i, table) => /^Title/.test($(table).find('th').first().text()))
+		.first()
+		.find('tr')
+		.toArray()
+		.slice(2); // skip first two header rows
 
 	await promiseLimit(2, rows.map((row, i) => {
 		return async () => {
 			const start = Date.now();
-
-			// title, developer, publisher_na, publisher_pal, release_na, release_pal
-			row = $(row);
-
-			const titleElements = row.find('td:nth-child(1) i');
+			const $titles = $(row).find('td:nth-child(1) i');
 
 			const titles = [];
 
-			titleElements.each((i, el) => {
-				let regionText = $(el).siblings('small').text().trim() || '';
+			$titles.each((i, el) => {
+				const $el = $(el);
+				let regionText = $el.siblings('small').text().trim() || '';
 				regionText = regionText.replace(/[()]/g, '');
 				const regions = regionText.split('/').map(x => x.trim()).filter(Boolean);
 
 				titles.push({
 					regions,
-					title: $(el).text().trim(),
+					title: $el.text().trim(),
 				});
 			});
 
@@ -1381,22 +1387,26 @@ const generateNesCsv = async (gameNames = []) => {
 				return;
 			}
 
-			const link = extractWikiLink(titleElements);
-			const defaultTitle =
-				(titles.find(title => !title.regions.length) ||
+			const href = $titles.find('a').first().attr('href');
+			const link = href ? new URL(href, 'https://en.wikipedia.org/').href : null;
+
+			const defaultTitle = (
+				titles.find(title => !title.regions.length) ||
 				titles.find(title => title.regions.indexOf('NA') !== -1) ||
-				titles[0]).title;
+				titles[0]
+			).title;
 
 			if (!defaultTitle) {
 				log(lliw.red(`failed to find default title in row ${i} (${link})`));
 				return;
 			}
 
-			log(`NES[${i}]: ${lliw.bold(defaultTitle)}`);
-			const gameInfo = await getGameInfo(link, 'nes', defaultTitle, gameNames.indexOf(defaultTitle) !== -1);
-			log(lliw.gray(` NES[${i}]: ${lliw.bold(defaultTitle)} finished in ${getElapsed(start)}`));
+			log(`${listPlatform}[${i}]: ${lliw.bold(defaultTitle)}`);
+			const gameInfo = await getGameInfo(link, listPlatform, defaultTitle, gameNames.indexOf(defaultTitle) !== -1);
+			log(lliw.gray(` ${listPlatform}[${i}]: ${lliw.bold(defaultTitle)} finished in ${getElapsed(start)}`));
 
-			nesCsv.push({
+			gameItems.push({
+				id: ++gameId,
 				link,
 				defaultTitle,
 				titles,
@@ -1405,21 +1415,35 @@ const generateNesCsv = async (gameNames = []) => {
 		};
 	}));
 
-	const csvFile = name => path.join(__dirname, 'dist', `${name}.csv`)
+	await generateCSVs(gameItems, listPlatform);
+	await importPlatformDataIntoDb(listPlatform);
 
-	const developerGameMap = {};
-	const publisherGameMap = {};
-	const genreGameMap = {};
-	const modeGameMap = {};
-	const platformGameMap = {};
-	const contributorMap = {};
-	const credits = [];
+	log(`${lliw.bold(gameItems.length)} ${listPlatform} games processed and imported in ${getElapsed(gameListStart)}`);
+};
+
+const writeCsv = async (file, data) => {
+	log(`writing CSV data to ${lliw.yellow(file)}... `);
+
+	await promiseMe(callback => fs.mkdir(path.dirname(file), { recursive: true }, callback));
+
+	return new Promise((resolve, reject) => {
+		const start = Date.now();
+		csvStringify(data)
+			.pipe(fs.createWriteStream(file))
+			.on('error', reject)
+			.on('finish', () => {
+				log(lliw.gray(` wrote to ${path.basename(file)} in ${getElapsed(start)}`));
+				resolve();
+			});
+	});
+};
+
+const generateCSVs = async (gameItems, listPlatform) => {
 	const releases = [];
 	const gameTitles = [];
-	const regionMap = {};
 
-	const gameRows = nesCsv.map((gameInfo, i) => {
-		const gameId = i + 1;
+	const gameRows = gameItems.map((gameInfo) => {
+		const gameId = gameInfo.id;
 		const setGameIdInMap = (map, items) => {
 			(items || []).forEach((item) => {
 				if (!map[item]) {
@@ -1442,6 +1466,7 @@ const generateNesCsv = async (gameNames = []) => {
 				}
 
 				credits.push({
+					id: credits.length + 1,
 					gameId,
 					contributorId: contributorMap[name].id,
 					role,
@@ -1473,7 +1498,7 @@ const generateNesCsv = async (gameNames = []) => {
 		];
 	});
 
-	nesCsv.forEach((gameInfo, i) => {
+	gameItems.forEach((gameInfo, i) => {
 		const gameId = i + 1;
 
 		if (!gameInfo.releases) {
@@ -1482,7 +1507,7 @@ const generateNesCsv = async (gameNames = []) => {
 		}
 
 		gameInfo.titles.forEach((titleInfo) => {
-			const regions = titleInfo.regions.length ? titleInfo.regions : [ null ];
+			const regions = titleInfo.regions.length ? titleInfo.regions : [null];
 
 			regions.forEach((region) => {
 				const titleId = gameTitles.length + 1;
@@ -1494,18 +1519,18 @@ const generateNesCsv = async (gameNames = []) => {
 
 				const regionId = region ? regionMap[region].id : null;
 
-				gameTitles.push([ titleId, gameId, titleInfo.title, regionId ]);
+				gameTitles.push([titleId, gameId, titleInfo.title, regionId]);
 			});
 		});
 
 		gameInfo.releases.forEach((release) => {
-			const platforms = release.platforms && release.platforms.length ? release.platforms : [ null ];
+			const platforms = release.platforms && release.platforms.length ? release.platforms : [null];
 			platforms.forEach((platformName) => {
 				const platform = platformGameMap[platformName];
 				if (!platform && platformName) {
 					log(lliw.magenta(`platform ${lliw.bold(platformName)} for game ${lliw.bold(gameInfo.defaultTitle)} not found in platformGameMap`));
 				}
-				const regions = release.regions && release.regions.length ? release.regions : [ null ];
+				const regions = release.regions && release.regions.length ? release.regions : [null];
 				regions.forEach((region) => {
 					const releaseId = releases.length + 1;
 
@@ -1529,62 +1554,18 @@ const generateNesCsv = async (gameNames = []) => {
 		});
 	});
 
-	const writeCsv = async (file, data) => {
-		log(`writing CSV data to ${lliw.yellow(file)}... `);
-		return new Promise((resolve, reject) => {
-			const start = Date.now();
-			csvStringify(data)
-				.pipe(fs.createWriteStream(file))
-				.on('error', reject)
-				.on('finish', () => {
-					log(lliw.gray(` wrote to ${path.basename(file)} in ${getElapsed(start)}`));
-					resolve();
-				});
-		});
-	};
-
-	const writeMapCSVs = (name, map) => {
-		return [
-			writeCsv(csvFile(name), Object.keys(map).map((name) => {
-				const item = map[name];
-				return [item.id, name];
-			})),
-			writeCsv(csvFile(`${name}_games`), Object.keys(map)
-				.map((name) => {
-					const item = map[name];
-					return item.gameIds.map(gameId => [item.id, gameId])
-				})
-				.reduce((arr, item) => arr.concat(item), [])
-			),
-		];
-	};
-
 	await Promise.all([
-		writeCsv(csvFile('games'), gameRows),
-		...writeMapCSVs('developers', developerGameMap),
-		...writeMapCSVs('publishers', publisherGameMap),
-		...writeMapCSVs('genres', genreGameMap),
-		...writeMapCSVs('modes', modeGameMap),
-		...writeMapCSVs('platforms', platformGameMap),
-		writeCsv(csvFile('contributors'), Object.keys(contributorMap).map((name) => {
-			const item = contributorMap[name];
-			return [ item.id, name ];
-		})),
-		writeCsv(csvFile('credits'), credits.map((credit, i) => {
-			const id = i + 1;
-			return [ id, credit.gameId, credit.contributorId, credit.role ];
-		})),
-		writeCsv(csvFile('game_releases'), releases),
-		writeCsv(csvFile('game_titles'), gameTitles),
-
-		writeCsv(csvFile('regions'), Object.keys(regionMap).map((name) => {
-			const item = regionMap[name];
-			return [item.id, name];
-		})),
+		writeCsv(csvFile(listPlatform, 'games'), gameRows),
+		writeCsv(csvFile(listPlatform, 'game_releases'), releases),
+		writeCsv(csvFile(listPlatform, 'game_titles'), gameTitles),
 	]);
+};
 
-	// generate sqlite db
-	const sqliteFile = path.join(__dirname, 'wikivgdb.sqlite');
+const recreateDb = async () => {
+	const start = Date.now();
+
+	log(`creating sqlite3 db at ${lliw.yellow(sqliteFile)}...`);
+
 	try {
 		fs.unlinkSync(sqliteFile);
 		log(lliw.magenta('deleted old sqlite db'));
@@ -1592,8 +1573,6 @@ const generateNesCsv = async (gameNames = []) => {
 		// don't care
 	}
 
-	log(`generating sqlite3 db at ${lliw.yellow(sqliteFile)}...`);
-	const start = Date.now();
 	execSync(`sqlite3 "${sqliteFile}" <<EOF
 create table game (
 	id integer primary key,
@@ -1709,39 +1688,119 @@ create table region (
 	id integer primary key,
 	name text not null unique
 );
-
-.mode csv
-.import ${csvFile('games')} game
-.import ${csvFile('developers')} developer
-.import ${csvFile('publishers')} publisher
-.import ${csvFile('genres')} genre
-.import ${csvFile('modes')} mode
-.import ${csvFile('platforms')} platform
-.import ${csvFile('contributors')} contributor
-.import ${csvFile('regions')} region
-
-.import ${csvFile('developers_games')} developer_game
-.import ${csvFile('publishers_games')} publisher_game
-.import ${csvFile('genres_games')} genre_game
-.import ${csvFile('modes_games')} mode_game
-.import ${csvFile('platforms_games')} platform_game
-.import ${csvFile('credits')} credit
-.import ${csvFile('game_releases')} game_release
-.import ${csvFile('game_titles')} game_title
 EOF`);
 
-	log(lliw.gray(` done generating sqlite db in ${getElapsed(start)}`));
-	log(`${lliw.bold(nesCsv.length)} NES games processed and imported in ${getElapsed(nesStart)}`);
+	log(lliw.gray(` done creating sqlite db in ${getElapsed(start)}`));
+};
 
+const importPlatformDataIntoDb = async (listPlatform) => {
+	const start = Date.now();
+
+	log(`generating sqlite3 db at ${lliw.yellow(sqliteFile)}...`);
+
+	execSync(`sqlite3 "${sqliteFile}" <<EOF
+.mode csv
+.import ${csvFile(listPlatform, 'games')} game
+.import ${csvFile(listPlatform, 'game_releases')} game_release
+.import ${csvFile(listPlatform, 'game_titles')} game_title
+EOF`);
+
+	log(lliw.gray(` done importing into sqlite db in ${getElapsed(start)}`));
+};
+
+const importSharedDataIntoDb = async () => {
+	const dir = 'shared';
+	const writeMapCSVs = (name, map) => {
+		return [
+			writeCsv(csvFile(dir, name), Object.keys(map).map((name) => {
+				const item = map[name];
+				return [item.id, name];
+			})),
+			writeCsv(csvFile(dir, `${name}_games`), Object.keys(map)
+				.map((name) => {
+					const item = map[name];
+					return item.gameIds.map(gameId => [item.id, gameId])
+				})
+				.reduce((arr, item) => arr.concat(item), [])
+			),
+		];
+	};
+
+	await Promise.all([
+		...writeMapCSVs('developers', developerGameMap),
+		...writeMapCSVs( 'publishers', publisherGameMap),
+		...writeMapCSVs( 'genres', genreGameMap),
+		...writeMapCSVs( 'modes', modeGameMap),
+		...writeMapCSVs( 'platforms', platformGameMap),
+		writeCsv(csvFile(dir, 'contributors'), Object.keys(contributorMap).map((name) => {
+			const item = contributorMap[name];
+			return [ item.id, name ];
+		})),
+		writeCsv(csvFile(dir, 'credits'), credits.map((credit) => {
+			return [ credit.id, credit.gameId, credit.contributorId, credit.role ];
+		})),
+		writeCsv(csvFile(dir, 'regions'), Object.keys(regionMap).map((name) => {
+			const item = regionMap[name];
+			return [item.id, name];
+		})),
+	]);
+
+	const start = Date.now();
+
+	log(`import shared data into ${lliw.yellow(sqliteFile)}...`);
+
+	execSync(`sqlite3 "${sqliteFile}" <<EOF
+.mode csv
+.import ${csvFile(dir, 'developers')} developer
+.import ${csvFile(dir, 'publishers')} publisher
+.import ${csvFile(dir, 'genres')} genre
+.import ${csvFile(dir, 'modes')} mode
+.import ${csvFile(dir, 'platforms')} platform
+.import ${csvFile(dir, 'contributors')} contributor
+.import ${csvFile(dir, 'regions')} region
+
+.import ${csvFile(dir, 'developers_games')} developer_game
+.import ${csvFile(dir, 'publishers_games')} publisher_game
+.import ${csvFile(dir, 'genres_games')} genre_game
+.import ${csvFile(dir, 'modes_games')} mode_game
+.import ${csvFile(dir, 'platforms_games')} platform_game
+.import ${csvFile(dir, 'credits')} credit
+EOF`);
+
+	log(lliw.gray(` done importing shared data in ${getElapsed(start)}`));
+};
+
+const generateForPlatform = async (platform, gameNames = []) => {
+	let listUrl;
+	switch (platform) {
+		case 'NES':
+			listUrl = 'https://en.wikipedia.org/wiki/List_of_Nintendo_Entertainment_System_games';
+			break;
+		case 'Genesis':
+			listUrl = 'https://en.wikipedia.org/wiki/List_of_Sega_Genesis_games';
+			break;
+		default:
+			throw new Error(`Unknown platform "${platform}"`);
+	}
+
+	await extractGameList(listUrl, platform, gameNames);
+};
+
+const generateAll = async (platforms = [], gameNames = []) => {
+	await recreateDb();
+
+	if (!platforms.length) {
+		platforms = [ 'NES' ];
+	}
+
+	for (const platform of platforms) {
+		await generateForPlatform(platform, gameNames);
+	}
+
+	await importSharedDataIntoDb();
 };
 
 module.exports = {
-	generateNesCsv,
 	getGameInfo,
-	extractListFromInfoboxData,
-	promiseLimit,
-	extractWikiLink,
-	getDate,
-	fetchHtml,
+	generateAll,
 };
-

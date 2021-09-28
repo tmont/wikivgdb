@@ -1,7 +1,7 @@
-const {generateNesCsv} = require('./gen');
+const {generateAll} = require('./gen');
 
-const gameNames = process.argv.slice(2);
+const platforms = process.argv.slice(2);
 
 (async () => {
-	await generateNesCsv(gameNames);
+	await generateAll(platforms);
 })();
