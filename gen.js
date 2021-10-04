@@ -10,6 +10,8 @@ const sqliteFile = path.join(__dirname, 'wikivgdb.sqlite');
 const csvFile = (dir, name) => path.join(__dirname, 'dist', `${dir}/${name}.csv`);
 
 let gameId = 0;
+let gameTitleId = 0;
+let gameReleaseId = 0;
 
 const regionMap = {};
 const developerGameMap = {};
@@ -19,6 +21,85 @@ const modeGameMap = {};
 const platformGameMap = {};
 const contributorMap = {};
 const credits = [];
+const listUrls = [
+	{
+		id: 1,
+		url: 'https://en.wikipedia.org/wiki/List_of_Nintendo_Entertainment_System_games',
+		listPlatform: 'NES',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2, 3],
+			releaseNA: 4,
+			releasePAL: 5,
+		},
+	},
+	{
+		id: 2,
+		url: 'https://en.wikipedia.org/wiki/List_of_Sega_Genesis_games',
+		listPlatform: 'Genesis',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2],
+			releaseJP: 3,
+			releaseNA: 4,
+			releasePAL: 5,
+		},
+	},
+	{
+		id: 3,
+		url: 'https://en.wikipedia.org/wiki/List_of_Super_Nintendo_Entertainment_System_games',
+		listPlatform: 'SNES',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2],
+			releaseJP: 3,
+			releaseNA: 4,
+			releasePAL: 5,
+		},
+	},
+	{
+		id: 4,
+		url: 'https://en.wikipedia.org/wiki/List_of_Nintendo_64_games',
+		listPlatform: 'Nintendo 64',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2],
+			releaseJP: 5,
+			releaseNA: 6,
+			releasePAL: 7,
+		},
+	},
+	{
+		id: 5,
+		url: 'https://en.wikipedia.org/wiki/List_of_PlayStation_games_(A%E2%80%93L)',
+		listPlatform: 'PlayStation_A-L',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2],
+			releaseJP: 3,
+			releaseNA: 4,
+			releasePAL: 5,
+		},
+	},
+	{
+		id: 6,
+		url: 'https://en.wikipedia.org/wiki/List_of_PlayStation_games_(M%E2%80%93Z)',
+		listPlatform: 'PlayStation_M-Z',
+		cols: {
+			title: 0,
+			developers: [1],
+			publishers: [2],
+			releaseJP: 3,
+			releaseNA: 4,
+			releasePAL: 5,
+		},
+	},
+];
 
 const log = (...msg) => {
 	msg.forEach((msg) => {
@@ -54,13 +135,9 @@ const promiseMe = (fn) => {
 	});
 }
 
-const fetchHtml = async (url, filename, force) => {
+const fetchHtml = async (url, filename) => {
 	filename = path.join(__dirname, 'html', filename);
 	try {
-		if (force) {
-			throw new Error('use the force, luke');
-		}
-
 		await promiseMe(callback => fs.access(filename, callback));
 	} catch {
 		await promiseMe(callback => fs.mkdir(path.dirname(filename), { recursive: true }, callback));
@@ -72,7 +149,7 @@ const fetchHtml = async (url, filename, force) => {
 			});
 			req.on('response', (res) => {
 				if (res.statusCode !== 200) {
-					log(`invalid status from URL "${url}": ${res.statusCode}`);
+					log(lliw.red(`invalid status from URL "${url}": ${res.statusCode}`));
 					reject(new Error(`invalid status for ${url}: ${res.statusCode}`));
 					return;
 				}
@@ -151,6 +228,155 @@ const clean = ($container, $) => {
 
 const flatten = (arr, item) => arr.concat(item);
 
+const monthMap = {
+	January: 1,
+	February: 2,
+	March: 3,
+	April: 4,
+	May: 5,
+	June: 6,
+	July: 7,
+	August: 8,
+	September: 9,
+	October: 10,
+	November: 11,
+	December: 12,
+};
+const monthRegex = new RegExp('(' + Object.keys(monthMap).join('|') + ')', 'i');
+
+const padZeroL = (x, len) => '0'.repeat(Math.max(0, len - x.toString().length)) + x.toString();
+
+const parseReleaseItem = (gameName, item, originalPlatforms = []) => {
+	const prefix = `[${gameName}]`;
+
+	let match;
+	let regions = [];
+	let dateText;
+	let platforms = originalPlatforms.concat([]);
+	item = item.trim();
+
+	// console.log(item);
+
+	if (match = /^(.+?):\s*(.+?):\s*(.+)/.exec(item)) {
+		// $platform: $regionCode: $monthName $day, $year
+		platforms.push(match[1]);
+
+		regions = match[2].split('/').map(r => r.trim()).filter(Boolean);
+		dateText = match[3];
+	} else if (match = /^(.+?):\s*(.+?)\s+\((.+)\)$/.exec(item)) {
+		// $regionCode: $monthName $day, $year ($platform1, $platform2...)
+		regions = match[1].split('/').map(r => r.trim()).filter(Boolean);
+		dateText = match[2];
+		if (!platforms.length) {
+			// if there are no platforms, assume stuff in parentheses is another platform
+			// otherwise it's probably a publisher (e.g. Mario Bros.)
+			platforms = platforms.concat(match[3].split(',').map(x => x.trim()));
+		}
+	} else if (match = /^(.+?):\s*(.+)/.exec(item)) {
+		// $regionCode: $monthName $day, $year
+		// OR
+		// $date: $platform1, $platform2, ...
+		regions = match[1].split('/').map(r => r.trim()).filter(Boolean);
+
+		// does it look like a date? does it have a month or a year?
+		if (regions.length === 1 && (monthRegex.test(regions[0]) || /^\d{4}$/.test(regions[0]))) {
+			dateText = match[1];
+			platforms = platforms.concat(match[2].split(',').map(x => x.trim()));
+			regions = [];
+		} else {
+			// more
+			dateText = match[2];
+		}
+	} else if (match = /^(.+)\((.+)\)$/.exec(item)) {
+		// $monthName $day, $year ($platform)
+		platforms = platforms.concat(match[2].split(',').map(x => x.trim()));
+		dateText = match[1];
+	} else {
+		// assume it's just a date
+		if (monthRegex.test(item) || /^\d{4}$/.test(item)) {
+			dateText = item;
+		} else {
+			let firstYear = item.split(',')[0]; // handle multiple years, e.g. "1989,1991"
+			firstYear = firstYear.split(';')[0]; // handle relative age, e.g. "1990; 31 years ago"
+			if (/^\d{4}$/.test(firstYear)) {
+				dateText = firstYear;
+			} else {
+				log(`${prefix} ${lliw.magenta(`no release match for text "${lliw.bold(item)}"`)}`);
+				return null;
+			}
+		}
+	}
+
+	const dateParts = dateText
+		.replace(/\s/g, ' ') // convert all whitespace to just spaces
+		.replace(/\(.+?\)$/g, ' ') // remove other annotations, e.g. "(beta)"
+		.split(' ')
+		.map(txt => txt.replace(/[,\s]/g, '').trim())
+		.filter(Boolean);
+
+	let month = monthMap[dateParts[0]];
+	let year = dateParts[dateParts.length - 1];
+	if (!month) {
+		month = 'xx';
+	}
+
+	if (!/^\d{4}$/.test(year)) {
+		year = 'xxxx';
+	}
+
+	let day = dateParts.length === 3 ? dateParts[1] : 'xx';
+
+	if (monthMap[day]) {
+		// non-American dates, e.g. 16 April 1990 instead of April 16, 1990
+		// Ikari Warriors II was like this
+		month = monthMap[day];
+		day = dateParts[0];
+	}
+
+	if (day !== 'xx' && !/^\d+$/.test(day)) {
+		day = 'xx';
+	}
+
+	const date = year === 'xxxx' ?
+		null :
+		[year, padZeroL(month, 2), padZeroL(day, 2)].join('-');
+
+	if (!date) {
+		return null;
+	}
+
+	if (regions.length) {
+		regions = regions
+			.map((region) => {
+				switch (region.toLowerCase()) {
+					case 'japan':
+					case 'jpn':
+						return 'JP';
+					case 'iigs':
+					case 'nes':
+					case 'switch':
+					case 'genesis':
+						platforms.push(region);
+						return null;
+					default:
+						return region;
+				}
+			})
+			.filter(Boolean);
+	}
+
+	// clean platforms
+	if (platforms.length) {
+		platforms = platforms.map(normalizePlatform).reduce(flatten, []);
+	}
+
+	return {
+		platforms: removeDuplicates(platforms),
+		regions: removeDuplicates(regions),
+		date,
+	};
+};
+
 const extractReleaseData = ($, $infoboxData, gameName) => {
 	const clean = ($el) => {
 		$el.find('*').each((i, el) => {
@@ -164,152 +390,6 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 	};
 
 	clean($infoboxData);
-
-	const monthMap = {
-		January: 1,
-		February: 2,
-		March: 3,
-		April: 4,
-		May: 5,
-		June: 6,
-		July: 7,
-		August: 8,
-		September: 9,
-		October: 10,
-		November: 11,
-		December: 12,
-	};
-	const monthRegex = new RegExp('(' + Object.keys(monthMap).join('|') + ')', 'i');
-
-	const padZeroL = (x, len) => '0'.repeat(Math.max(0, len - x.toString().length)) + x.toString();
-	const parseReleaseItem = (item, originalPlatforms = []) => {
-		let match;
-		let regions = [];
-		let dateText;
-		let platforms = originalPlatforms.concat([]);
-		item = item.trim();
-
-		// console.log(item);
-
-		if (match = /^(.+?):\s*(.+?):\s*(.+)/.exec(item)) {
-			// $platform: $regionCode: $monthName $day, $year
-			platforms.push(match[1]);
-
-			regions = match[2].split('/').map(r => r.trim()).filter(Boolean);
-			dateText = match[3];
-		} else if (match = /^(.+?):\s*(.+?)\s+\((.+)\)$/.exec(item)) {
-			// $regionCode: $monthName $day, $year ($platform1, $platform2...)
-			regions = match[1].split('/').map(r => r.trim()).filter(Boolean);
-			dateText = match[2];
-			if (!platforms.length) {
-				// if there are no platforms, assume stuff in parentheses is another platform
-				// otherwise it's probably a publisher (e.g. Mario Bros.)
-				platforms = platforms.concat(match[3].split(',').map(x => x.trim()));
-			}
-		} else if (match = /^(.+?):\s*(.+)/.exec(item)) {
-			// $regionCode: $monthName $day, $year
-			// OR
-			// $date: $platform1, $platform2, ...
-			regions = match[1].split('/').map(r => r.trim()).filter(Boolean);
-
-			// does it look like a date? does it have a month or a year?
-			if (regions.length === 1 && (monthRegex.test(regions[0]) || /^\d{4}$/.test(regions[0]))) {
-				dateText = match[1];
-				platforms = platforms.concat(match[2].split(',').map(x => x.trim()));
-				regions = [];
-			} else {
-				// more
-				dateText = match[2];
-			}
-		} else if (match = /^(.+)\((.+)\)$/.exec(item)) {
-			// $monthName $day, $year ($platform)
-			platforms = platforms.concat(match[2].split(',').map(x => x.trim()));
-			dateText = match[1];
-		} else {
-			// assume it's just a date
-			if (monthRegex.test(item) || /^\d{4}$/.test(item)) {
-				dateText = item;
-			} else {
-				let firstYear = item.split(',')[0]; // handle multiple years, e.g. "1989,1991"
-				firstYear = firstYear.split(';')[0]; // handle relative age, e.g. "1990; 31 years ago"
-				if (/^\d{4}$/.test(firstYear)) {
-					dateText = firstYear;
-				} else {
-					log(`${prefix} ${lliw.magenta(`no release match for text "${lliw.bold(item)}"`)}`);
-					return null;
-				}
-			}
-		}
-
-		const dateParts = dateText
-			.replace(/\s/g, ' ') // convert all whitespace to just spaces
-			.replace(/\(.+?\)$/g, ' ') // remove other annotations, e.g. "(beta)"
-			.split(' ')
-			.map(txt => txt.replace(/[,\s]/g, '').trim())
-			.filter(Boolean);
-
-		let month = monthMap[dateParts[0]];
-		let year = dateParts[dateParts.length - 1];
-		if (!month) {
-			month = 'xx';
-		}
-
-		if (!/^\d{4}$/.test(year)) {
-			year = 'xxxx';
-		}
-
-		let day = dateParts.length === 3 ? dateParts[1] : 'xx';
-
-		if (monthMap[day]) {
-			// non-American dates, e.g. 16 April 1990 instead of April 16, 1990
-			// Ikari Warriors II was like this
-			month = monthMap[day];
-			day = dateParts[0];
-		}
-
-		if (day !== 'xx' && !/^\d+$/.test(day)) {
-			day = 'xx';
-		}
-
-		const date = year === 'xxxx' ?
-			null :
-			[year, padZeroL(month, 2), padZeroL(day, 2)].join('-');
-
-		if (!date) {
-			return null;
-		}
-
-		if (regions.length) {
-			regions = regions
-				.map((region) => {
-					switch (region.toLowerCase()) {
-						case 'japan':
-						case 'jpn':
-							return 'JP';
-						case 'iigs':
-						case 'nes':
-						case 'switch':
-						case 'genesis':
-							platforms.push(region);
-							return null;
-						default:
-							return region;
-					}
-				})
-				.filter(Boolean);
-		}
-
-		// clean platforms
-		if (platforms.length) {
-			platforms = platforms.map(normalizePlatform).reduce(flatten, []);
-		}
-
-		return {
-			platforms: removeDuplicates(platforms),
-			regions: removeDuplicates(regions),
-			date,
-		};
-	};
 
 	let platformElements = $();
 
@@ -325,7 +405,6 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 	}
 
 	const releases = [];
-	const prefix = `[${gameName}]`;
 
 	const parsePlainlist = ($list, platforms, depth = 0) => {
 		$list.find('> ul > li').toArray().forEach((li) => {
@@ -337,7 +416,7 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 				});
 			} else {
 				const text = $li.text().replace(/\[\d]/g, '').trim();
-				const release = parseReleaseItem(text, platforms);
+				const release = parseReleaseItem(gameName, text, platforms);
 				if (release) {
 					releases.push(release);
 				}
@@ -357,7 +436,7 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 			})
 			.reduce(flatten, [])
 			.forEach((item) => {
-				const release = parseReleaseItem(item);
+				const release = parseReleaseItem(gameName, item);
 				if (release) {
 					releases.push(release);
 				}
@@ -450,7 +529,7 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 							next = next.nextSibling;
 						}
 
-						const release = parseReleaseItem(item, platforms);
+						const release = parseReleaseItem(gameName, item, platforms);
 						if (release) {
 							releases.push(release);
 						} else {
@@ -469,39 +548,109 @@ const extractReleaseData = ($, $infoboxData, gameName) => {
 		}
 	}
 
-	const sortArray = (a, b, alternative) => {
-		if (!a.length) {
-			return -1;
-		}
-		if (!b.length) {
-			return 1;
-		}
+	return releases.sort(sortReleases);
+};
 
-		const result = a[0].localeCompare(b[0]);
-		if (alternative && !result) {
-			return alternative();
-		}
+const sortArray = (a, b, alternative) => {
+	if (!a.length) {
+		return -1;
+	}
+	if (!b.length) {
+		return 1;
+	}
 
-		return result;
-	};
+	const result = a[0].localeCompare(b[0]);
+	if (alternative && !result) {
+		return alternative();
+	}
 
-	// sort by date, platform, regions[0]
-	return releases.sort((a, b) => {
-		if (a.date === null) {
-			return -1;
-		}
-		if (b.date === null) {
-			return 1;
-		}
+	return result;
+};
 
-		const res = a.date.localeCompare(b.date);
+// sort by date, platforms[0], regions[0]
+const sortReleases = (a, b) => {
+	if (a.date === null) {
+		return -1;
+	}
+	if (b.date === null) {
+		return 1;
+	}
 
-		if (res === 0) {
-			return sortArray(a.platforms, b.platforms, () => sortArray(a.regions, b.regions));
-		}
+	const res = a.date.localeCompare(b.date);
 
-		return res;
+	if (res === 0) {
+		return sortArray(a.platforms, b.platforms, () => sortArray(a.regions, b.regions));
+	}
+
+	return res;
+};
+
+const removeAll = (haystack, needle) => {
+	let index;
+	let count = 0;
+	while ((index = haystack.indexOf(needle)) !== -1) {
+		haystack.splice(index, 1);
+		count++;
+	}
+
+	return count;
+};
+
+const mergeAndRemove = (haystack, normalized, ...temp) => {
+	let found = false;
+	(temp || []).forEach((item) => {
+		found = (removeAll(haystack, item) > 0) || found;
 	});
+
+	if (found && haystack.indexOf(normalized) === -1) {
+		haystack.push(normalized);
+	}
+};
+
+const addIfMatches = (haystack, collection, itemsToAdd, ...needles) => {
+	for (const regex of needles) {
+		if (haystack.some(item => regex.test(item))) {
+			for (const newItem of itemsToAdd) {
+				if (collection.indexOf(newItem) !== -1) {
+					continue;
+				}
+				collection.push(newItem);
+			}
+			return;
+		}
+	}
+};
+
+const combine = (haystack, delimiter, ...temp) => {
+	if (!temp.length) {
+		return;
+	}
+
+	let containsAll = true;
+	for (const comb of temp) {
+		containsAll = containsAll && haystack.indexOf(comb) !== -1;
+		if (!containsAll) {
+			return;
+		}
+	}
+
+	for (const comb of temp) {
+		removeAll(haystack, comb);
+	}
+
+	haystack.push(temp.join(delimiter));
+};
+
+const uncombine = (haystack, delimiter, name) => {
+	if (!name) {
+		return;
+	}
+
+	const index = haystack.indexOf(name);
+	if (index !== -1) {
+		haystack.splice(index, 1);
+		haystack.push(...name.split(delimiter).map(item => item.trim()));
+	}
 };
 
 const normalizePlatform = (platformName) => {
@@ -834,6 +983,144 @@ const normalizePlatform = (platformName) => {
 		}, []);
 };
 
+const processContainerMarkup = ($, $container) => {
+	clean($container, $);
+
+	let splitter = '<br>';
+	if (!$container.has('br').length) {
+		splitter = ',';
+	}
+
+	return ($container.html() || '')
+		.split(splitter)
+
+		.map(html => $('<div>' + (html || '') + '</div>').text().trim())
+
+		.map(item => item.split('\n'))
+		.reduce(flatten, [])
+
+		.map(item => item.replace(/^:\s*/, ''))
+		.map(item => item.replace(/^[A-Z/]+?:\s*/, ''))
+		.map(item => item.replace(/\[[0-9]+?]/g, ''))
+		.map(item => item.replace(/\[[a-z]]/g, ''))
+		.map(item => item.replace(/\[citation needed]/g, ''))
+
+		.filter(Boolean)
+
+		.map(item => item.split(',').map(x => x.trim()))
+		.reduce((arr, item) => arr.concat(item), [])
+
+		.map(item => item.split(':').map(x => x.trim()))
+		.reduce(flatten, [])
+
+		.map(item => item.replace(/\/+$/g, ''))
+		.map(item => item.replace(/^\(.+?\)/, ''))
+		.map(item => item.replace(/^[^(].+?\)[\s\S]+/, ''))
+
+		.filter(item => !/^possibly\s+/i.test(item)) // e.g. "Possibly Bothtec or Pixel" from The Uncanny X-Men
+		.filter(item => !item.endsWith(':'))
+		.filter(item => !/^\(.+?\)$/.test(item))
+		.filter(item => !/^\[.+?]$/.test(item));
+};
+
+const normalizeDeveloperOrPublisher = (items) => {
+	[
+		'Atari',
+		'Bandai America',
+		'Data East USA',
+		'FCI',
+		'Hi-Tech Expressions',
+		'Human Entertainment',
+		'Imagineering',
+		'ICOM Simulations',
+		'Mindscape',
+		'Softie',
+		'Strategic Simulations',
+	].forEach(name => combine(items, ', ', name, 'Inc.'));
+	['Beam Software Pty.', 'ITL Co.', 'SIMS Co.', 'G-mode Co.'].forEach(name => combine(items, ', ', name, 'Ltd.'));
+
+	uncombine(items, '&', 'Tamtex & Tose');
+	uncombine(items, ' and ', 'Williams and Midway');
+	uncombine(items, '/', 'Data East/Sakata SAS');
+	uncombine(items, '/', 'Data East/SAS Sakata');
+	uncombine(items, '/', 'Red Company/Atlus');
+	uncombine(items, '/', 'ISCO/Opera House');
+	uncombine(items, '/', 'Marionette/SRS');
+	uncombine(items, '/', 'Hudson Soft/Electro Brain');
+	uncombine(items, '/', 'Konami/Sega');
+	uncombine(items, ' / ', 'Meldac / Liveplanning');
+	uncombine(items, '/', 'Retro-Bit/Limited Run Games');
+
+	mergeAndRemove(items, 'Acclaim Entertainment', 'Acclaim', 'Acclaim Japan');
+	mergeAndRemove(items, 'Advance Communication Company', 'Advance Communication Co.');
+	mergeAndRemove(items, 'ASCII Corporation', 'ASCII', 'ASCII Entertainment');
+	mergeAndRemove(items, 'AI', 'A.I Company Ltd.');
+	mergeAndRemove(items, 'Aicom', 'Aicom Corporation');
+	mergeAndRemove(items, 'Arc Developments', 'Arc');
+	mergeAndRemove(items, 'Asmik Ace', 'Asmik', 'Asmik Corporation of America');
+	mergeAndRemove(items, 'Atari Corporation', 'Atari Corp.');
+	mergeAndRemove(items, 'Atari SA', 'Infogrames', 'Infogrames Entertainment');
+	mergeAndRemove(items, 'Bandai', 'Bandai America, Inc.');
+	mergeAndRemove(items, 'Bandai Namco Entertainment', 'Bandai Namco Games');
+	mergeAndRemove(items, 'Beam Software', 'Beam Software Pty., Ltd.', 'Laser Beam', 'Laser Beam Entertainment');
+	mergeAndRemove(items, 'Broderbund', 'Brøderbund');
+	mergeAndRemove(items, 'Bullet-Proof Software', 'Bullet Proof Software');
+	mergeAndRemove(items, 'Culture Brain', 'Culture Brain USA');
+	mergeAndRemove(items, 'Data East', 'Data East USA, Inc.', 'Data East USA');
+	mergeAndRemove(items, 'Data East/Sakata SAS', 'Data East/SAS Sakata');
+	mergeAndRemove(items, 'Erbe Software', 'Erbe Software S.A.');
+	mergeAndRemove(items, 'Eurocom', 'Eurocom Entertainment Software');
+	mergeAndRemove(items, 'FCI', 'FCI, Inc.');
+	mergeAndRemove(items, 'G-Mode', 'G-mode Co., Ltd.');
+	mergeAndRemove(items, 'Gray Matter', 'Gray Matter Inc.');
+	mergeAndRemove(items, 'Gremlin Interactive', 'Gremlin Graphics');
+	mergeAndRemove(items, 'HAL Laboratory', 'HAL America', 'HAL America Inc.');
+	mergeAndRemove(items, 'Hi Tech Expressions', 'Hi-Tech Expressions, Inc.', 'Hi-Tech Expressions');
+	mergeAndRemove(items, 'Human Entertainment', 'Human Entertainment, Inc.');
+	mergeAndRemove(items, 'ICOM Simulations, Inc.', 'ICOM Simulations');
+	mergeAndRemove(items, 'Imagine Software', 'Imagine Studios');
+	mergeAndRemove(items, 'Imagineering', 'Imagineering Inc.', 'Imagineering, Inc.');
+	mergeAndRemove(items, 'Interplay Entertainment', 'Interplay', 'Interplay Productions');
+	mergeAndRemove(items, 'Jaleco', 'Jaleco Entertainment');
+	mergeAndRemove(items, 'JVC', 'JVC Musical Industries', 'Victor', 'Victor Entertainment', 'Victor Musical Industries');
+	mergeAndRemove(items, 'Kemco * Seika', 'Kemco-Seika');
+	mergeAndRemove(items, 'Konami', 'Konami of Europe');
+	mergeAndRemove(items, 'Majesco Entertainment', 'Majesco Sales');
+	mergeAndRemove(items, 'Midway Games', 'Bally Midway', 'Bally', 'Midway', 'Bally/Midway', 'Midway Manufacturing');
+	mergeAndRemove(items, 'Milton Bradley Company', 'Milton Bradley');
+	mergeAndRemove(items, 'Mindscape', 'Mindscape Inc.', 'Mindscape, Inc.');
+	mergeAndRemove(items, 'Motivetime', 'MotiveTime', 'Motivetime Ltd.');
+	mergeAndRemove(items, 'Namco', 'Namcot');
+	mergeAndRemove(items, 'Nexoft Corporation', 'Nexoft');
+	mergeAndRemove(items, 'Nintendo R&D1', 'Nintendo Research & Development 1');
+	mergeAndRemove(items, 'Nintendo R&D2', 'Nintendo Research & Development 2');
+	mergeAndRemove(items, 'Ocean Software', 'Ocean', 'Ocean of America');
+	mergeAndRemove(items, 'Palcom', 'Palcom Software');
+	mergeAndRemove(items, 'Pony Canyon', 'Pony Inc.', 'Ponyca');
+	mergeAndRemove(items, 'Rare', 'Rare Ltd.');
+	mergeAndRemove(items, 'Rocket Science Production', 'Rocket Science Productions');
+	mergeAndRemove(items, 'Sakata SAS', 'SAS Sakata');
+	mergeAndRemove(items, 'Sammy Corporation', 'Sammy USA', 'Sammy', 'American Sammy');
+	mergeAndRemove(items, 'Sega', 'Sega of America', 'Sega Europe');
+	mergeAndRemove(items, 'SETA Corporation', 'SETA', 'Seta', 'Seta Corporation');
+	mergeAndRemove(items, 'Sharp Corporation', 'Sharp');
+	mergeAndRemove(items, 'Sony Imagesoft', 'Sony Electronic Publishing');
+	mergeAndRemove(items, 'Special FX Ltd.', 'Special FX');
+	mergeAndRemove(items, 'Strategic Simulations', 'Strategic Simulations, Inc.');
+	mergeAndRemove(items, 'Sunsoft', 'Sun Corporation of America');
+	mergeAndRemove(items, 'Taito', 'Taito America');
+	mergeAndRemove(items, 'Tec Toy', 'Tectoy');
+	mergeAndRemove(items, 'Ubisoft', 'Ubi Soft');
+	mergeAndRemove(items, 'Vic Tokai', 'Vic Tokai Corporation');
+	mergeAndRemove(items, 'Video System', 'Video System Co.');
+	mergeAndRemove(items, 'Virgin Games', 'Virgin Games USA', 'Virgin Interactive Entertainment');
+	mergeAndRemove(items, 'Westwood Studios', 'Westwood', 'Westwood Associates');
+	mergeAndRemove(items, 'Winkysoft', 'Winky Soft');
+	mergeAndRemove(items, 'WMS', 'Williams', 'Williams Electronics', 'WMS Industries');
+
+	return items;
+};
+
 const extractListFromInfoboxData = ($, label, gameName) => {
 	// TODO some games (e.g. Hook) have multiple infoboxes for each platform (e.g. NES/Famicom, SNES/SFC, etc.)
 	let $container = $('#bodyContent .mw-parser-output .infobox').first()
@@ -846,50 +1133,12 @@ const extractListFromInfoboxData = ($, label, gameName) => {
 	}
 
 	const process = ($container) => {
-		clean($container, $);
-
-		let splitter = '<br>';
-		if (!$container.has('br').length) {
-			splitter = ',';
-		}
-
-		return ($container.html() || '')
-			.split(splitter)
-
-			.map(html => $('<div>' + (html || '') + '</div>').text().trim())
-
-			.map(item => item.split('\n'))
-			.reduce(flatten, [])
-
-			.map(item => item.replace(/^:\s*/, ''))
-			.map(item => item.replace(/^[A-Z/]+?:\s*/, ''))
-			.map(item => item.replace(/\[[0-9]+?]/g, ''))
-			.map(item => item.replace(/\[[a-z]]/g, ''))
-			.map(item => item.replace(/\[citation needed]/g, ''))
-
-			.filter(Boolean)
-
-			.map(item => item.split(',').map(x => x.trim()))
-			.reduce((arr, item) => arr.concat(item), [])
-
-			.map(item => item.split(':').map(x => x.trim()))
-			.reduce(flatten, [])
-
-			.map(item => item.replace(/\/+$/g, ''))
-			.map(item => item.replace(/^\(.+?\)/, ''))
-			.map(item => item.replace(/^[^(].+?\)[\s\S]+/, ''))
-
-			.filter(item => !/^possibly\s+/i.test(item)) // e.g. "Possibly Bothtec or Pixel" from The Uncanny X-Men
-			.filter(item => !item.endsWith(':'))
-			.filter(item => !/^\(.+?\)$/.test(item))
-			.filter(item => !/^\[.+?]$/.test(item));
+		return processContainerMarkup($, $container);
 	};
 
 	// process all <ul> first, and then process everything else
 	// some markup is not separated by a <br> or "," but by a <ul>
-	let items = [];
-
-	items = $container
+	let items = $container
 		.find('.plainlist')
 		.toArray()
 		.map((el) => {
@@ -977,183 +1226,21 @@ const extractListFromInfoboxData = ($, label, gameName) => {
 		items = items.map(item => item.toLowerCase());
 	}
 
-	const removeAll = (haystack, needle) => {
-		let index;
-		let count = 0;
-		while ((index = haystack.indexOf(needle)) !== -1) {
-			haystack.splice(index, 1);
-			count++;
-		}
+	combine(items, ', ', 'Java Platform', 'Micro Edition');
 
-		return count;
-	};
-
-	const mergeAndRemove = (normalized, ...temp) => {
-		let found = false;
-		(temp || []).forEach((item) => {
-			found = (removeAll(items, item) > 0) || found;
-		});
-
-		if (found && items.indexOf(normalized) === -1) {
-			items.push(normalized);
-		}
-	};
-
-	const addIfMatches = (haystack, newItems, ...needles) => {
-		for (const regex of needles) {
-			if (items.some(item => regex.test(item))) {
-				for (const newItem of newItems) {
-					if (haystack.indexOf(newItem) !== -1) {
-						continue;
-					}
-					haystack.push(newItem);
-				}
-				return;
-			}
-		}
-	};
-
-	const combine = (delimiter, ...temp) => {
-		if (!temp.length) {
-			return;
-		}
-
-		let containsAll = true;
-		for (const comb of temp) {
-			containsAll = containsAll && items.indexOf(comb) !== -1;
-			if (!containsAll) {
-				return;
-			}
-		}
-
-		for (const comb of temp) {
-			removeAll(items, comb);
-		}
-
-		items.push(temp.join(delimiter));
-	};
-
-	const uncombine = (delimiter, name) => {
-		if (!name) {
-			return;
-		}
-
-		const index = items.indexOf(name);
-		if (index !== -1) {
-			items.splice(index, 1);
-			items.push(...name.split(delimiter).map(item => item.trim()));
-		}
-	};
-
-	combine(' ', '2 player', 'Co-op');
-	combine(' ', 'Vertical', 'scrolling shooter');
-	[
-		'Atari',
-		'Bandai America',
-		'Data East USA',
-		'FCI',
-		'Hi-Tech Expressions',
-		'Human Entertainment',
-		'Imagineering',
-		'ICOM Simulations',
-		'Mindscape',
-		'Softie',
-		'Strategic Simulations',
-	].forEach(name => combine(', ', name, 'Inc.'));
-
-	combine(', ', 'Up to 2 players', 'alternating turns');
-	[ 'Beam Software Pty.', 'ITL Co.', 'SIMS Co.', 'G-mode Co.' ].forEach(name => combine(', ', name, 'Ltd.'));
-
-	combine(', ', 'Java Platform', 'Micro Edition');
-
-	uncombine('&', 'Tamtex & Tose');
-	uncombine(' and ', 'Williams and Midway');
-	uncombine('/', 'Data East/Sakata SAS');
-	uncombine('/', 'Data East/SAS Sakata');
-	uncombine('/', 'Red Company/Atlus');
-	uncombine('/', 'ISCO/Opera House');
-	uncombine('/', 'Marionette/SRS');
-	uncombine('/', 'Hudson Soft/Electro Brain');
-	uncombine('/', 'Konami/Sega');
-	uncombine(' / ', 'Meldac / Liveplanning');
-	uncombine('/', 'Retro-Bit/Limited Run Games');
-	uncombine('/', 'single-player/multiplayer');
-	uncombine(';', 'single-player; multiplayer');
+	combine(items, ' ', '2 player', 'Co-op');
+	combine(items, ' ', 'Vertical', 'scrolling shooter');
+	combine(items, ', ', 'Up to 2 players', 'alternating turns');
+	uncombine(items, '/', 'single-player/multiplayer');
+	uncombine(items, ';', 'single-player; multiplayer');
 
 	if (label === 'developer' || label === 'publisher') {
-		mergeAndRemove('Acclaim Entertainment', 'Acclaim', 'Acclaim Japan');
-		mergeAndRemove('Advance Communication Company', 'Advance Communication Co.');
-		mergeAndRemove('ASCII Corporation', 'ASCII', 'ASCII Entertainment');
-		mergeAndRemove('AI', 'A.I Company Ltd.');
-		mergeAndRemove('Aicom', 'Aicom Corporation');
-		mergeAndRemove('Arc Developments', 'Arc');
-		mergeAndRemove('Asmik Ace', 'Asmik', 'Asmik Corporation of America');
-		mergeAndRemove('Atari Corporation', 'Atari Corp.');
-		mergeAndRemove('Atari SA', 'Infogrames', 'Infogrames Entertainment');
-		mergeAndRemove('Bandai', 'Bandai America, Inc.');
-		mergeAndRemove('Bandai Namco Entertainment', 'Bandai Namco Games');
-		mergeAndRemove('Beam Software', 'Beam Software Pty., Ltd.', 'Laser Beam', 'Laser Beam Entertainment');
-		mergeAndRemove('Broderbund', 'Brøderbund');
-		mergeAndRemove('Bullet-Proof Software', 'Bullet Proof Software');
-		mergeAndRemove('Culture Brain', 'Culture Brain USA');
-		mergeAndRemove('Data East', 'Data East USA, Inc.', 'Data East USA');
-		mergeAndRemove('Data East/Sakata SAS', 'Data East/SAS Sakata');
-		mergeAndRemove('Erbe Software', 'Erbe Software S.A.');
-		mergeAndRemove('Eurocom', 'Eurocom Entertainment Software');
-		mergeAndRemove('FCI', 'FCI, Inc.');
-		mergeAndRemove('G-Mode', 'G-mode Co., Ltd.');
-		mergeAndRemove('Gray Matter', 'Gray Matter Inc.');
-		mergeAndRemove('Gremlin Interactive', 'Gremlin Graphics');
-		mergeAndRemove('HAL Laboratory', 'HAL America', 'HAL America Inc.');
-		mergeAndRemove('Hi Tech Expressions', 'Hi-Tech Expressions, Inc.', 'Hi-Tech Expressions');
-		mergeAndRemove('Human Entertainment', 'Human Entertainment, Inc.');
-		mergeAndRemove('ICOM Simulations, Inc.', 'ICOM Simulations');
-		mergeAndRemove('Imagine Software', 'Imagine Studios');
-		mergeAndRemove('Imagineering', 'Imagineering Inc.', 'Imagineering, Inc.');
-		mergeAndRemove('Interplay Entertainment', 'Interplay', 'Interplay Productions');
-		mergeAndRemove('Jaleco', 'Jaleco Entertainment');
-		mergeAndRemove('JVC', 'JVC Musical Industries', 'Victor', 'Victor Entertainment', 'Victor Musical Industries');
-		mergeAndRemove('Kemco * Seika', 'Kemco-Seika');
-		mergeAndRemove('Konami', 'Konami of Europe');
-		mergeAndRemove('Majesco Entertainment', 'Majesco Sales');
-		mergeAndRemove('Midway Games', 'Bally Midway', 'Bally', 'Midway', 'Bally/Midway', 'Midway Manufacturing');
-		mergeAndRemove('Milton Bradley Company', 'Milton Bradley');
-		mergeAndRemove('Mindscape', 'Mindscape Inc.', 'Mindscape, Inc.');
-		mergeAndRemove('Motivetime', 'MotiveTime', 'Motivetime Ltd.');
-		mergeAndRemove('Namco', 'Namcot');
-		mergeAndRemove('Nexoft Corporation', 'Nexoft');
-		mergeAndRemove('Nintendo R&D1', 'Nintendo Research & Development 1');
-		mergeAndRemove('Nintendo R&D2', 'Nintendo Research & Development 2');
-		mergeAndRemove('Ocean Software', 'Ocean', 'Ocean of America');
-		mergeAndRemove('Palcom', 'Palcom Software');
-		mergeAndRemove('Pony Canyon', 'Pony Inc.', 'Ponyca');
-		mergeAndRemove('Rare', 'Rare Ltd.');
-		mergeAndRemove('Rocket Science Production', 'Rocket Science Productions');
-		mergeAndRemove('Sakata SAS', 'SAS Sakata');
-		mergeAndRemove('Sammy Corporation', 'Sammy USA', 'Sammy', 'American Sammy');
-		mergeAndRemove('Sega', 'Sega of America', 'Sega Europe');
-		mergeAndRemove('SETA Corporation', 'SETA', 'Seta', 'Seta Corporation');
-		mergeAndRemove('Sharp Corporation', 'Sharp');
-		mergeAndRemove('Sony Imagesoft', 'Sony Electronic Publishing');
-		mergeAndRemove('Special FX Ltd.', 'Special FX');
-		mergeAndRemove('Strategic Simulations', 'Strategic Simulations, Inc.');
-		mergeAndRemove('Sunsoft', 'Sun Corporation of America');
-		mergeAndRemove('Taito', 'Taito America');
-		mergeAndRemove('Tec Toy', 'Tectoy');
-		mergeAndRemove('Ubisoft', 'Ubi Soft');
-		mergeAndRemove('Vic Tokai', 'Vic Tokai Corporation');
-		mergeAndRemove('Video System', 'Video System Co.');
-		mergeAndRemove('Virgin Games', 'Virgin Games USA', 'Virgin Interactive Entertainment');
-		mergeAndRemove('Westwood Studios', 'Westwood', 'Westwood Associates');
-		mergeAndRemove('Winkysoft', 'Winky Soft');
-		mergeAndRemove('WMS', 'Williams', 'Williams Electronics', 'WMS Industries');
-	}
-
-	if (label === 'mode') {
-		addIfMatches(items, [ 'alternating', 'multiplayer' ], /alternating/, /separate turns/);
-		addIfMatches(items, [ 'cooperative', 'multiplayer' ], /cooperative/, /co-op/);
-		addIfMatches(items, [ 'multiplayer' ], /[2-9]/, /two/, /three/, /four/, /five/, /six/, /seven/, /eight/, /\bvs\b/, /multi/);
-		addIfMatches(items, [ 'single-player' ], /\b1\b/, /\bone\b/, /separate/, /single/, /up to/);
+		normalizeDeveloperOrPublisher(items);
+	} else if (label === 'mode') {
+		addIfMatches(items, items, [ 'alternating', 'multiplayer' ], /alternating/, /separate turns/);
+		addIfMatches(items, items, [ 'cooperative', 'multiplayer' ], /cooperative/, /co-op/);
+		addIfMatches(items, items, [ 'multiplayer' ], /[2-9]/, /two/, /three/, /four/, /five/, /six/, /seven/, /eight/, /\bvs\b/, /multi/);
+		addIfMatches(items, items, [ 'single-player' ], /\b1\b/, /\bone\b/, /separate/, /single/, /up to/);
 
 		// remove everything that doesn't match one of these
 		const allowedModes = {
@@ -1164,84 +1251,82 @@ const extractListFromInfoboxData = ($, label, gameName) => {
 		};
 
 		items = items.filter(item => !!allowedModes[item]);
-	}
-
-	if (label === 'genre') {
+	} else if (label === 'genre') {
 		const newItems = [];
-		addIfMatches(newItems, [ '2D' ], /2d/i);
-		addIfMatches(newItems, [ '3D' ], /3d/i);
-		addIfMatches(newItems, [ 'Action' ], /action/i);
-		addIfMatches(newItems, [ 'Arcade' ], /arcade/i);
-		addIfMatches(newItems, [ 'Adventure' ], /adventure/i);
-		addIfMatches(newItems, [ 'Beat \'em up' ], /beat '?em up/i);
-		addIfMatches(newItems, [ 'Block breaker' ], /block breaker/i, /breakout/i);
-		addIfMatches(newItems, [ 'Board game' ], /board game/i);
-		addIfMatches(newItems, [ 'Board game', 'Chess' ], /chess/i);
-		addIfMatches(newItems, [ 'Business simulator', 'Simulation' ], /business simulat/i, /tycoon/i);
-		addIfMatches(newItems, [ 'Casino' ], /casino/i);
-		addIfMatches(newItems, [ 'Flight simulator' ], /flight simulat/i, /space .+simulator/i, /air combat simul/i);
-		addIfMatches(newItems, [ 'Drawing' ], /drawing/i);
-		addIfMatches(newItems, [ 'Driving' ], /driving/i);
-		addIfMatches(newItems, [ 'Dungeon crawl' ], /dungeon crawl/i);
-		addIfMatches(newItems, [ 'Educational' ], /education/i, /edutainment/i);
-		addIfMatches(newItems, [ 'Fighting' ], /fighting/i);
-		addIfMatches(newItems, [ 'First-person' ], /first-person/i);
-		addIfMatches(newItems, [ 'Game show' ], /game show/i);
-		addIfMatches(newItems, [ 'Hack-and-slash' ], /hack.+slash/i);
-		addIfMatches(newItems, [ 'Fantasy' ], /fantasy/i);
-		addIfMatches(newItems, [ 'Space' ], /spaceship/i, /space trading/i);
-		addIfMatches(newItems, [ 'Light gun', 'Shooter' ], /light gun/i);
-		addIfMatches(newItems, [ 'Maze' ], /maze/i);
-		addIfMatches(newItems, [ 'Music' ], /music/i);
-		addIfMatches(newItems, [ 'Pinball' ], /pinball/i);
-		addIfMatches(newItems, [ 'Platformer' ], /platform/i);
-		addIfMatches(newItems, [ 'Point-and-click' ], /point-and-click/i, /graphic adventure/i);
-		addIfMatches(newItems, [ 'Productivity' ], /productivity/i);
-		addIfMatches(newItems, [ 'Puzzle' ], /puzzle/i);
-		addIfMatches(newItems, [ 'Role-playing' ], /role-?playing/i, /rpg/i);
-		addIfMatches(newItems, [ 'Shooter' ], /shoot(er|ing)/i);
-		addIfMatches(newItems, [ 'Shooter', 'Scrolling shooter' ], /scrolling shooter/i);
-		addIfMatches(newItems, [ 'Shooter', 'Fixed shooter' ], /fixed shooter/i);
-		addIfMatches(newItems, [ 'Simulation' ], /simulat(ion|or)/i);
+		addIfMatches(items, newItems, [ '2D' ], /2d/i);
+		addIfMatches(items, newItems, [ '3D' ], /3d/i);
+		addIfMatches(items, newItems, [ 'Action' ], /action/i);
+		addIfMatches(items, newItems, [ 'Arcade' ], /arcade/i);
+		addIfMatches(items, newItems, [ 'Adventure' ], /adventure/i);
+		addIfMatches(items, newItems, [ 'Beat \'em up' ], /beat '?em up/i);
+		addIfMatches(items, newItems, [ 'Block breaker' ], /block breaker/i, /breakout/i);
+		addIfMatches(items, newItems, [ 'Board game' ], /board game/i);
+		addIfMatches(items, newItems, [ 'Board game', 'Chess' ], /chess/i);
+		addIfMatches(items, newItems, [ 'Business simulator', 'Simulation' ], /business simulat/i, /tycoon/i);
+		addIfMatches(items, newItems, [ 'Casino' ], /casino/i);
+		addIfMatches(items, newItems, [ 'Flight simulator' ], /flight simulat/i, /space .+simulator/i, /air combat simul/i);
+		addIfMatches(items, newItems, [ 'Drawing' ], /drawing/i);
+		addIfMatches(items, newItems, [ 'Driving' ], /driving/i);
+		addIfMatches(items, newItems, [ 'Dungeon crawl' ], /dungeon crawl/i);
+		addIfMatches(items, newItems, [ 'Educational' ], /education/i, /edutainment/i);
+		addIfMatches(items, newItems, [ 'Fighting' ], /fighting/i);
+		addIfMatches(items, newItems, [ 'First-person' ], /first-person/i);
+		addIfMatches(items, newItems, [ 'Game show' ], /game show/i);
+		addIfMatches(items, newItems, [ 'Hack-and-slash' ], /hack.+slash/i);
+		addIfMatches(items, newItems, [ 'Fantasy' ], /fantasy/i);
+		addIfMatches(items, newItems, [ 'Space' ], /spaceship/i, /space trading/i);
+		addIfMatches(items, newItems, [ 'Light gun', 'Shooter' ], /light gun/i);
+		addIfMatches(items, newItems, [ 'Maze' ], /maze/i);
+		addIfMatches(items, newItems, [ 'Music' ], /music/i);
+		addIfMatches(items, newItems, [ 'Pinball' ], /pinball/i);
+		addIfMatches(items, newItems, [ 'Platformer' ], /platform/i);
+		addIfMatches(items, newItems, [ 'Point-and-click' ], /point-and-click/i, /graphic adventure/i);
+		addIfMatches(items, newItems, [ 'Productivity' ], /productivity/i);
+		addIfMatches(items, newItems, [ 'Puzzle' ], /puzzle/i);
+		addIfMatches(items, newItems, [ 'Role-playing' ], /role-?playing/i, /rpg/i);
+		addIfMatches(items, newItems, [ 'Shooter' ], /shoot(er|ing)/i);
+		addIfMatches(items, newItems, [ 'Shooter', 'Scrolling shooter' ], /scrolling shooter/i);
+		addIfMatches(items, newItems, [ 'Shooter', 'Fixed shooter' ], /fixed shooter/i);
+		addIfMatches(items, newItems, [ 'Simulation' ], /simulat(ion|or)/i);
 
-		addIfMatches(newItems, [ 'Run-and-gun' ], /run[-\s]and[-\s]gun/i);
-		addIfMatches(newItems, [ 'Shoot \'em up' ], /shoot '?em up/i);
-		addIfMatches(newItems, [ 'Side scroller' ], /(horizontal|side).+scroll/i);
-		addIfMatches(newItems, [ 'American football', 'Sports' ], /american football/i, /traditional football simulation/i);
-		addIfMatches(newItems, [ 'Baseball', 'Sports' ], /baseball/i);
-		addIfMatches(newItems, [ 'Baseball', 'Softball', 'Sports' ], /softball/i);
-		addIfMatches(newItems, [ 'Basketball', 'Sports' ], /basketball/i);
-		addIfMatches(newItems, [ 'Cricket', 'Sports' ], /cricket/i);
-		addIfMatches(newItems, [ 'Pool (cue sports)', 'Sports' ], /cue sports/i, /sports.+pool/i);
-		addIfMatches(newItems, [ 'Fishing', 'Sports' ], /fishing/i);
-		addIfMatches(newItems, [ 'Ice hockey', 'Sports' ], /hockey/i);
-		addIfMatches(newItems, [ 'Professional wrestling', 'Wrestling', 'Sports' ], /pro.* wrestling/i);
-		addIfMatches(newItems, [ 'Racing', 'Sports' ], /racing/i);
-		addIfMatches(newItems, [ 'Skateboarding', 'Sports' ], /skateboarding/i);
-		addIfMatches(newItems, [ 'Skiing', 'Sports' ], /\bski(\b|ing|er)/i);
-		addIfMatches(newItems, [ 'Snowboarding', 'Sports' ], /snowboarding/i);
-		addIfMatches(newItems, [ 'Soccer', 'Sports' ], /soccer/i, /association football/i);
-		addIfMatches(newItems, [ 'Sports' ], /sport/i);
-		addIfMatches(newItems, [ 'Track and field', 'Sports' ], /olympics/i);
-		addIfMatches(newItems, [ 'Exercise', 'Sports' ], /exergaming/i, /exercise/i);
-		addIfMatches(newItems, [ 'Volleyball', 'Sports' ], /volleyball/i);
-		addIfMatches(newItems, [ 'Boxing', 'Sports' ], /boxing/i);
-		addIfMatches(newItems, [ 'Wrestling', 'Sports' ], /wrestling/i);
-		addIfMatches(newItems, [ 'Golf', 'Sports' ], /golf/i);
-		addIfMatches(newItems, [ 'Stealth' ], /stealth/i);
-		addIfMatches(newItems, [ 'Strategy' ], /strategy/i);
-		addIfMatches(newItems, [ 'Submarine' ], /submarine/i);
-		addIfMatches(newItems, [ 'Survival' ], /survival/i);
-		addIfMatches(newItems, [ 'Horror' ], /horror/i);
-		addIfMatches(newItems, [ 'Tactical' ], /tactic(s|al)/i);
-		addIfMatches(newItems, [ 'Tank', 'Military' ], /\btank\b/i);
-		addIfMatches(newItems, [ 'Tennis', 'Sports' ], /tennis/i);
-		addIfMatches(newItems, [ 'Third-person' ], /third[-\s]person/i, /3rd[-\s]person/i);
-		addIfMatches(newItems, [ 'Turn-based' ], /turn[-\s]based/i);
-		addIfMatches(newItems, [ 'Vehicular combat' ], /vehicular combat/i);
-		addIfMatches(newItems, [ 'Vertical scroller' ], /vertical(ly)?[-\s]scroll/i);
-		addIfMatches(newItems, [ 'War', 'Military' ], /wargame/i);
-		addIfMatches(newItems, [ 'Western' ], /western/i);
+		addIfMatches(items, newItems, [ 'Run-and-gun' ], /run[-\s]and[-\s]gun/i);
+		addIfMatches(items, newItems, [ 'Shoot \'em up' ], /shoot '?em up/i);
+		addIfMatches(items, newItems, [ 'Side scroller' ], /(horizontal|side).+scroll/i);
+		addIfMatches(items, newItems, [ 'American football', 'Sports' ], /american football/i, /traditional football simulation/i);
+		addIfMatches(items, newItems, [ 'Baseball', 'Sports' ], /baseball/i);
+		addIfMatches(items, newItems, [ 'Baseball', 'Softball', 'Sports' ], /softball/i);
+		addIfMatches(items, newItems, [ 'Basketball', 'Sports' ], /basketball/i);
+		addIfMatches(items, newItems, [ 'Cricket', 'Sports' ], /cricket/i);
+		addIfMatches(items, newItems, [ 'Pool (cue sports)', 'Sports' ], /cue sports/i, /sports.+pool/i);
+		addIfMatches(items, newItems, [ 'Fishing', 'Sports' ], /fishing/i);
+		addIfMatches(items, newItems, [ 'Ice hockey', 'Sports' ], /hockey/i);
+		addIfMatches(items, newItems, [ 'Professional wrestling', 'Wrestling', 'Sports' ], /pro.* wrestling/i);
+		addIfMatches(items, newItems, [ 'Racing', 'Sports' ], /racing/i);
+		addIfMatches(items, newItems, [ 'Skateboarding', 'Sports' ], /skateboarding/i);
+		addIfMatches(items, newItems, [ 'Skiing', 'Sports' ], /\bski(\b|ing|er)/i);
+		addIfMatches(items, newItems, [ 'Snowboarding', 'Sports' ], /snowboarding/i);
+		addIfMatches(items, newItems, [ 'Soccer', 'Sports' ], /soccer/i, /association football/i);
+		addIfMatches(items, newItems, [ 'Sports' ], /sport/i);
+		addIfMatches(items, newItems, [ 'Track and field', 'Sports' ], /olympics/i);
+		addIfMatches(items, newItems, [ 'Exercise', 'Sports' ], /exergaming/i, /exercise/i);
+		addIfMatches(items, newItems, [ 'Volleyball', 'Sports' ], /volleyball/i);
+		addIfMatches(items, newItems, [ 'Boxing', 'Sports' ], /boxing/i);
+		addIfMatches(items, newItems, [ 'Wrestling', 'Sports' ], /wrestling/i);
+		addIfMatches(items, newItems, [ 'Golf', 'Sports' ], /golf/i);
+		addIfMatches(items, newItems, [ 'Stealth' ], /stealth/i);
+		addIfMatches(items, newItems, [ 'Strategy' ], /strategy/i);
+		addIfMatches(items, newItems, [ 'Submarine' ], /submarine/i);
+		addIfMatches(items, newItems, [ 'Survival' ], /survival/i);
+		addIfMatches(items, newItems, [ 'Horror' ], /horror/i);
+		addIfMatches(items, newItems, [ 'Tactical' ], /tactic(s|al)/i);
+		addIfMatches(items, newItems, [ 'Tank', 'Military' ], /\btank\b/i);
+		addIfMatches(items, newItems, [ 'Tennis', 'Sports' ], /tennis/i);
+		addIfMatches(items, newItems, [ 'Third-person' ], /third[-\s]person/i, /3rd[-\s]person/i);
+		addIfMatches(items, newItems, [ 'Turn-based' ], /turn[-\s]based/i);
+		addIfMatches(items, newItems, [ 'Vehicular combat' ], /vehicular combat/i);
+		addIfMatches(items, newItems, [ 'Vertical scroller' ], /vertical(ly)?[-\s]scroll/i);
+		addIfMatches(items, newItems, [ 'War', 'Military' ], /wargame/i);
+		addIfMatches(items, newItems, [ 'Western' ], /western/i);
 
 		items = newItems;
 	}
@@ -1270,13 +1355,13 @@ const extractListFromInfoboxData = ($, label, gameName) => {
 				.reduce(flatten, [])
 				.filter(Boolean);
 
-				mergeAndRemove('Alberto Jose González', 'Alberto González');
-				mergeAndRemove('Alex DeMeo', 'Alex Demeo', 'Alex De Meo');
-				mergeAndRemove('Alexey Pajitnov', 'Alexey Pazhitnov');
-				mergeAndRemove('John Cassells', 'John Cassels');
-				mergeAndRemove('John Van Ryzin', 'John van Ryzin');
-				mergeAndRemove('Roger Amidon', 'Roger W. Amidon');
-				mergeAndRemove('Shuya Takaoka', 'Shuuya Takaoka');
+				mergeAndRemove(items, 'Alberto Jose González', 'Alberto González');
+				mergeAndRemove(items, 'Alex DeMeo', 'Alex Demeo', 'Alex De Meo');
+				mergeAndRemove(items, 'Alexey Pajitnov', 'Alexey Pazhitnov');
+				mergeAndRemove(items, 'John Cassells', 'John Cassels');
+				mergeAndRemove(items, 'John Van Ryzin', 'John van Ryzin');
+				mergeAndRemove(items, 'Roger Amidon', 'Roger W. Amidon');
+				mergeAndRemove(items, 'Shuya Takaoka', 'Shuuya Takaoka');
 			break;
 		case 'platform':
 			items = items.map(normalizePlatform).reduce(flatten, []);
@@ -1286,12 +1371,18 @@ const extractListFromInfoboxData = ($, label, gameName) => {
 	return removeDuplicates(items);
 };
 
-const getGameInfo = async (gameUrl, system, gameName, force = false) => {
+const getGameInfo = async (gameUrl, platform, gameName) => {
 	if (!gameUrl) {
 		return {};
 	}
 
-	const html = await fetchHtml(gameUrl, `games/${system}/${gameName}.html`, force);
+	let html;
+	try {
+		html = await fetchHtml(gameUrl, `games/${platform}/${gameName}.html`);
+	} catch (e) {
+		return {};
+	}
+
 	const $ = cheerio.load(html);
 	const imageUrl = $('meta[property="og:image"]').attr('content') || null;
 	const $infobox = $('#bodyContent .mw-parser-output .infobox').first();
@@ -1349,76 +1440,173 @@ const getGameInfo = async (gameUrl, system, gameName, force = false) => {
 	};
 };
 
-const extractGameList = async (wikiUrl, listPlatform, gameNames) => {
+const extractRowFromGameList = async ($, $row, i, cols, platform) => {
+	const $titles = $row.find('th,td').eq(cols.title).find('i');
+
+	const titles = [];
+
+	$titles.each((i, el) => {
+		const $el = $(el);
+		// NES uses <small>, Genesis/SNES/64/PlayStation uses <sup>
+		let regionText = $el.siblings('small').text().trim() || $el.siblings('sup').text().trim();
+		regionText = regionText.replace(/[()]/g, '');
+		const regions = regionText.split('/').map(x => x.trim()).filter(Boolean);
+
+		titles.push({
+			regions,
+			title: $el.text().trim(),
+		});
+	});
+
+	if (!titles.length) {
+		log(lliw.red(`failed to find titles in row ${i}`));
+		return null;
+	}
+
+	const href = $titles.find('a').first().attr('href');
+	const link = href ? new URL(href, 'https://en.wikipedia.org/').href : null;
+
+	const defaultTitle = (
+		titles.find(title => !title.regions.length) ||
+		titles.find(title => title.regions.indexOf('NA') !== -1) ||
+		titles[0]
+	).title;
+
+	if (!defaultTitle) {
+		log(lliw.red(`failed to find default title in row ${i} (${link})`));
+		return null;
+	}
+
+	let developers = [];
+	let publishers = [];
+	let releases = [];
+	cols.developers.forEach((col) => {
+		developers = developers.concat(processContainerMarkup($, $row.find('th,td').eq(col)));
+	});
+	cols.publishers.forEach((col) => {
+		publishers = publishers.concat(processContainerMarkup($, $row.find('th,td').eq(col)));
+	});
+
+	developers = removeDuplicates(normalizeDeveloperOrPublisher(developers));
+	publishers = removeDuplicates(normalizeDeveloperOrPublisher(publishers));
+
+	// console.log(require('util').inspect(developers, false, null, true));
+	// console.log(require('util').inspect(publishers, false, null, true));
+
+	const addRelease = (col, region) => {
+		if (col < 0) {
+			return;
+		}
+
+		const text = $row.find('th,td').eq(col).text().trim();
+		if (text && text.toLowerCase() !== 'unreleased') {
+			const release = parseReleaseItem(defaultTitle, text, [ platform ]);
+			if (release) {
+				release.regions.push(region);
+				releases.push(release);
+			}
+		}
+	};
+
+	addRelease(cols.releaseNA, 'NA');
+	addRelease(cols.releaseJP, 'JP');
+	addRelease(cols.releasePAL, 'PAL');
+
+	return {
+		defaultTitle,
+		titles,
+		link,
+		developers,
+		publishers,
+		releases,
+	};
+};
+
+const extractFromGameList = async (listPlatform, rowNum = -1) => {
+	const { id: listUrlId, url: wikiListUrl, cols } = listUrls.find(item => item.listPlatform === listPlatform);
+
 	const gameListStart = Date.now();
-	const html = await fetchHtml(wikiUrl, `lists/games-${listPlatform}.html`);
+	const html = await fetchHtml(wikiListUrl, `lists/games-${listPlatform}.html`);
 	const $ = cheerio.load(html);
 
-	const gameItems = [];
-
-	const rows = $('.wikitable')
+	let rows = $('.wikitable')
 		.filter((i, table) => /^Title/.test($(table).find('th').first().text()))
 		.first()
 		.find('tr')
 		.toArray()
 		.slice(2); // skip first two header rows
 
-	await promiseLimit(2, rows.map((row, i) => {
+	if (rowNum >= 0) {
+		rows = rows.slice(rowNum, rowNum + 1);
+	}
+
+	const gameItems = [];
+	await promiseLimit(1, rows.map((row, i) => {
 		return async () => {
 			const start = Date.now();
-			const $titles = $(row).find('td:nth-child(1) i');
-
-			const titles = [];
-
-			$titles.each((i, el) => {
-				const $el = $(el);
-				let regionText = $el.siblings('small').text().trim() || '';
-				regionText = regionText.replace(/[()]/g, '');
-				const regions = regionText.split('/').map(x => x.trim()).filter(Boolean);
-
-				titles.push({
-					regions,
-					title: $el.text().trim(),
-				});
-			});
-
-			if (!titles.length) {
-				log(lliw.red(`failed to find titles in row ${i}`));
+			const rowInfo = await extractRowFromGameList($, $(row), i, cols, listPlatform);
+			if (!rowInfo) {
+				log(lliw.red(`unable to extract row info for row ${i} (${listPlatform})`));
 				return;
 			}
-
-			const href = $titles.find('a').first().attr('href');
-			const link = href ? new URL(href, 'https://en.wikipedia.org/').href : null;
-
-			const defaultTitle = (
-				titles.find(title => !title.regions.length) ||
-				titles.find(title => title.regions.indexOf('NA') !== -1) ||
-				titles[0]
-			).title;
-
-			if (!defaultTitle) {
-				log(lliw.red(`failed to find default title in row ${i} (${link})`));
-				return;
-			}
+			const defaultTitle = rowInfo.defaultTitle;
 
 			log(`${listPlatform}[${i}]: ${lliw.bold(defaultTitle)}`);
-			const gameInfo = await getGameInfo(link, listPlatform, defaultTitle, gameNames.indexOf(defaultTitle) !== -1);
+			const gameInfo = await getGameInfo(rowInfo.link, listPlatform, defaultTitle);
 			log(lliw.gray(` ${listPlatform}[${i}]: ${lliw.bold(defaultTitle)} finished in ${getElapsed(start)}`));
+
+			// merge in stuff from the row in the big list to stuff from the infobox on the game article
+			let { developers: rowDevs, publishers: rowPubs, releases: rowReleases, ...rowStuff } = rowInfo;
+			let { developers: gameDevs, publishers: gamePubs, releases: gameReleases, platforms, ...gameStuff } = gameInfo;
+
+			gameReleases = gameReleases || [];
+			rowReleases = rowReleases || [];
+			platforms = platforms || [];
+			platforms.push(listPlatform);
+
+			const developers = removeDuplicates((rowDevs || []).concat(gameDevs || []));
+			const publishers = removeDuplicates((rowPubs || []).concat(gamePubs || []));
+
+			for (const rowRelease of rowReleases) {
+				const gameRelease = (gameReleases || []).find((gameRelease) => {
+					const rowRegion = rowRelease.regions[0];
+					const rowPlatform = rowRelease.platforms[0];
+					const matchesRegion = gameRelease.regions.some(
+						// PAL === EU for these purposes
+						region => region === rowRegion || (rowRegion === 'PAL' && region === 'EU')
+					);
+					const matchesPlatform = gameRelease.platforms.some(platform => platform === rowPlatform);
+					return matchesRegion && matchesPlatform;
+				});
+
+				if (gameRelease) {
+					// replace a more vague date with a more specific one. more specific === less "x"s
+					if (rowRelease.date.replace(/[^x]/g, '').length < gameRelease.date.replace(/[^x]/g, '').length) {
+						gameRelease.date = rowRelease.date;
+					}
+				} else {
+					// release doesn't exist, add it
+					gameReleases.push(rowRelease);
+				}
+			}
 
 			gameItems.push({
 				id: ++gameId,
-				link,
-				defaultTitle,
-				titles,
-				...gameInfo,
+				developers,
+				publishers,
+				...rowStuff,
+				...gameStuff,
+				platforms: removeDuplicates(platforms),
+				releases: gameReleases.sort(sortReleases),
+				listUrlId,
+				wikiListRow: i,
 			});
 		};
 	}));
 
-	await generateCSVs(gameItems, listPlatform);
-	await importPlatformDataIntoDb(listPlatform);
+	log(`${lliw.bold(gameItems.length)} ${listPlatform} games extracted from list in ${getElapsed(gameListStart)}`);
 
-	log(`${lliw.bold(gameItems.length)} ${listPlatform} games processed and imported in ${getElapsed(gameListStart)}`);
+	return gameItems;
 };
 
 const writeCsv = async (file, data) => {
@@ -1495,11 +1683,13 @@ const generateCSVs = async (gameItems, listPlatform) => {
 			gameInfo.description,
 			gameInfo.link,
 			gameInfo.imageUrl,
+			gameInfo.listUrlId,
+			gameInfo.wikiListRow,
 		];
 	});
 
-	gameItems.forEach((gameInfo, i) => {
-		const gameId = i + 1;
+	gameItems.forEach((gameInfo) => {
+		const gameId = gameInfo.id;
 
 		if (!gameInfo.releases) {
 			log(`releases does not exist for game ${gameId}`, gameInfo);
@@ -1510,7 +1700,7 @@ const generateCSVs = async (gameItems, listPlatform) => {
 			const regions = titleInfo.regions.length ? titleInfo.regions : [null];
 
 			regions.forEach((region) => {
-				const titleId = gameTitles.length + 1;
+				const titleId = ++gameTitleId;
 				if (region && !regionMap[region]) {
 					regionMap[region] = {
 						id: Object.keys(regionMap).length + 1,
@@ -1532,7 +1722,7 @@ const generateCSVs = async (gameItems, listPlatform) => {
 				}
 				const regions = release.regions && release.regions.length ? release.regions : [null];
 				regions.forEach((region) => {
-					const releaseId = releases.length + 1;
+					const releaseId = ++gameReleaseId;
 
 					if (region && !regionMap[region]) {
 						regionMap[region] = {
@@ -1574,13 +1764,23 @@ const recreateDb = async () => {
 	}
 
 	execSync(`sqlite3 "${sqliteFile}" <<EOF
+create table list_url (
+	id integer primary key,
+	url text not null unique,
+	platform_name text not null
+);
 create table game (
 	id integer primary key,
 	title text,
 	description text,
 	wiki_link_url text,
-	image_url text
+	image_url text,
+	list_url_id integer not null
+		constraint game_list_url_id_fk references list_url
+			on update restrict on delete restrict,
+	list_row integer not null
 );
+create unique index game_list_url_id_list_row on game (list_url_id, list_row);
 create table game_title (
 	id integer primary key,
 	game_id integer not null
@@ -1743,6 +1943,13 @@ const importSharedDataIntoDb = async () => {
 			const item = regionMap[name];
 			return [item.id, name];
 		})),
+		writeCsv(csvFile(dir, 'list_urls'), listUrls.map((item) => {
+			return [
+				item.id,
+				item.url,
+				item.listPlatform,
+			];
+		})),
 	]);
 
 	const start = Date.now();
@@ -1758,6 +1965,7 @@ const importSharedDataIntoDb = async () => {
 .import ${csvFile(dir, 'platforms')} platform
 .import ${csvFile(dir, 'contributors')} contributor
 .import ${csvFile(dir, 'regions')} region
+.import ${csvFile(dir, 'list_urls')} list_url
 
 .import ${csvFile(dir, 'developers_games')} developer_game
 .import ${csvFile(dir, 'publishers_games')} publisher_game
@@ -1770,27 +1978,17 @@ EOF`);
 	log(lliw.gray(` done importing shared data in ${getElapsed(start)}`));
 };
 
-const generateForPlatform = async (platform, gameNames = []) => {
-	let listUrl;
-	switch (platform) {
-		case 'NES':
-			listUrl = 'https://en.wikipedia.org/wiki/List_of_Nintendo_Entertainment_System_games';
-			break;
-		case 'Genesis':
-			listUrl = 'https://en.wikipedia.org/wiki/List_of_Sega_Genesis_games';
-			break;
-		default:
-			throw new Error(`Unknown platform "${platform}"`);
-	}
-
-	await extractGameList(listUrl, platform, gameNames);
+const generateForPlatform = async (platform) => {
+	const gameItems = await extractFromGameList(platform);
+	await generateCSVs(gameItems, platform);
+	await importPlatformDataIntoDb(platform);
 };
 
 const generateAll = async (platforms = [], gameNames = []) => {
 	await recreateDb();
 
 	if (!platforms.length) {
-		platforms = [ 'NES' ];
+		platforms = [ 'NES', 'Genesis' ];
 	}
 
 	for (const platform of platforms) {
@@ -1802,5 +2000,7 @@ const generateAll = async (platforms = [], gameNames = []) => {
 
 module.exports = {
 	getGameInfo,
+	extractFromGameList,
+	extractRowFromGameList,
 	generateAll,
 };

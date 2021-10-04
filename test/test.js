@@ -1,12 +1,14 @@
 const gen = require('../gen');
 const expect = require('expect.js');
+const {extractRowFromGameList, extractFromGameList} = require('../gen');
 
 describe('NES', () => {
 	const expectGameInfo = async (link, gameName, expected) => {
-		const actual = await gen.getGameInfo(link, 'nes', gameName);
+		const actual = await gen.getGameInfo(link, 'NES', gameName);
 		// console.log(require('util').inspect(actual, false, null, true));
 		const expectedKeys = Object.keys(expected);
 		const actualKeys = Object.keys(actual);
+
 		expectedKeys.forEach((key) => {
 			expect(actual).to.have.property(key);
 			expect(actual[key]).to.eql(expected[key]);
@@ -14,6 +16,9 @@ describe('NES', () => {
 		});
 
 		actualKeys.forEach((key) => {
+			if (key === 'wikiListUrl' || key === 'wikiListRow') {
+				return;
+			}
 			expect(expected).to.have.property(key);
 		});
 	};
@@ -6627,6 +6632,19 @@ describe('NES', () => {
 				{platforms: ['MS-DOS'], regions: ['NA'], date: '1991-xx-xx'},
 				{platforms: ['Famicom', 'NES'], regions: ['EU'], date: '1992-xx-xx'}
 			]
+		});
+	});
+
+	describe.skip('List extraction', () => {
+		// single title, multiple releases
+		it('10-Yard Fight', async () => {
+			const result = await extractFromGameList('NES', 2);
+			console.log(require('util').inspect(result, false, null, true));
+		});
+
+		it('Aerobiz', async () => {
+			const result = await extractFromGameList('Genesis', 14);
+			console.log(require('util').inspect(result, false, null, true));
 		});
 	});
 });

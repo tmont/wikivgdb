@@ -60,8 +60,8 @@ generations will reuse the local HTML.
 ![ERD](./wikivgdb-erd.png)
 
 ## Sample queries
+### All platforms with game count
 ```sql
--- all platforms with game count
 select
 	p.name,
 	count(distinct g.id) count,
@@ -76,14 +76,15 @@ group by 1
 order by 2 desc, 1;
 ```
 
+### All games matching specific genre
 ```sql
--- get a bunch of info for all games matching a specific genre
 select
 	g.id,
 	g.title,
 	group_concat(distinct gt.title) as alternative_titles,
 	max(gr.date) as latest_release,
 	group_concat(distinct reg.name) as release_regions,
+	group_concat(distinct pl.name) as platforms,
 	group_concat(distinct p.name) as publishers,
 	group_concat(distinct d.name) as developers,
 	group_concat(distinct ge.name) as genres,
@@ -116,6 +117,10 @@ left outer join mode m
 	on mg.mode_id = m.id
 left outer join game_release gr
 	on gr.game_id = g.id
+left outer join platform_game plg
+	on g.id = plg.game_id
+left outer join platform pl
+	on pl.id = plg.platform_id
 left outer join region reg
 	on gr.region_id = reg.id
 left outer join game_title gt
@@ -123,4 +128,18 @@ left outer join game_title gt
 	and gt.title != g.title
 group by 1, 2
 order by 4 desc, 2;
+```
+
+### Most credited contributors
+```sql
+select
+	c.name,
+	count(*) as credits,
+	group_concat(distinct cr.role) as roles
+from contributor c
+inner join credit cr
+	on c.id = cr.contributor_id
+group by 1
+order by 2 desc, 1
+limit 20;
 ```
